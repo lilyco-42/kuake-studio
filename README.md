@@ -193,6 +193,10 @@ cd ~/code/kuake-studio/tools
 
 ![Wine 里的文件视图](screenshot-wine-files.png)
 
+![Wine 里的账号页](screenshot-wine-account.png)
+
+![Wine 里的「上传前加密」](screenshot-wine-upload-encrypt.png)
+
 三个边界：
 
 1. 这是 **Wine 11.21**，不是真 Windows 机器；真机上的 MSI 升级路径未验。
