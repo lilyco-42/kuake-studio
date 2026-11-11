@@ -1,0 +1,25 @@
+# Rust
+/target/
+
+# 前端
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.vite/
+
+# 凭据绝不入库
+.env
+*.env
+!.env.example
+
+# 构建产物与临时文件
+*.log
+*.msi
+*.wixobj
+*.wixpdb
+/pkg/
+/wix/*.wxs.bak
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/

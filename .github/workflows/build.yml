@@ -1,0 +1,376 @@
+name: build
+
+# 三个平台各出一套安装包：
+#   windows -> 便携 zip + MSI（WiX v3，带开始菜单快捷方式和 exe 图标）
+#   linux   -> tar.gz（含 .desktop 和 png 图标）
+#   macos   -> 通用二进制（arm64 + x86_64 用 lipo 合成）+ .app 包
+#
+# 触发：推分支（验证能编）、推 v* 标签（额外发布到 Releases）、手动。
+# 注意 workflow_dispatch 只有在默认分支上存在本文件时才出现，所以先推 main 再点。
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "发布用的标签名（仅手动发布时填，如 v0.1.0）"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # 关掉增量，CI 里增量只会让缓存变脏
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # ── 快速门禁：格式 / lint / 单测（只有一台机器，几十秒）────────────────
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: check
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --locked
+
+  # ── 各平台打包 ───────────────────────────────────────────────────────
+  package:
+    name: ${{ matrix.name }}
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: macos-universal
+            os: macos-latest
+            target: universal2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.name == 'macos-universal' && 'aarch64-apple-darwin,x86_64-apple-darwin' || matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # bun.lock 是 1.4 写的（lockfileVersion 2）；钉死版本免得 latest 换格式
+          bun-version: "1.4.4"
+
+      # bun.lock / bunfig.toml 里钉的是国内镜像（本地装依赖快），
+      # GitHub runner 在境外，换成官方源。锁文件内容一致，--frozen-lockfile 仍然通过。
+      - name: 前端依赖切到官方源
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            for (const f of ["frontend/bun.lock", "frontend/bunfig.toml"]) {
+              if (!fs.existsSync(f)) continue;
+              const s = fs.readFileSync(f, "utf8")
+                .replaceAll("https://registry.npmmirror.com/", "https://registry.npmjs.org/");
+              fs.writeFileSync(f, s);
+            }
+            console.log("registry -> npmjs");
+          '
+
+      - name: 构建前端
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun run build
+
+      # ── Windows ─────────────────────────────────────────────────────
+      - name: 构建（windows）
+        if: matrix.name == 'windows-x64'
+        run: cargo build --release --locked --bin kuake-studio
+
+      - name: 自检（windows）
+        if: matrix.name == 'windows-x64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = ".\target\release\kuake-studio.exe"
+
+          # 1) schema 必须能出 17 条命令（进程能起、Registry 装配正常）
+          $schema = & $exe --schema
+          if ($LASTEXITCODE -ne 0) { throw "---schema 退出码 $LASTEXITCODE" }
+          $cmds = ($schema | ConvertFrom-Json).Count
+          Write-Host "schema 命令数: $cmds"
+          if ($cmds -lt 17) { throw "schema 命令数异常: $cmds" }
+
+          # 2) 真起一次 Web 服务，确认 dist 找得到、/api/boot 通
+          $env:KUAKE_STUDIO_NO_OPEN = "1"
+          $env:KUAKE_STUDIO_PORT = "8791"
+          $proc = Start-Process -FilePath $exe -PassThru -NoNewWindow
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 40; $i++) {
+              Start-Sleep -Milliseconds 250
+              try {
+                $boot = Invoke-RestMethod "http://127.0.0.1:8791/api/boot" -TimeoutSec 2
+                $ok = $true
+                break
+              } catch { }
+            }
+            if (-not $ok) { throw "/api/boot 一直没响应" }
+            if ($boot.name -ne "kuake-studio") { throw "boot.name 异常: $($boot.name)" }
+            Write-Host "boot ok: $($boot.name) $($boot.version) kuake=$($boot.kuake)"
+            $ui = Invoke-WebRequest "http://127.0.0.1:8791/" -TimeoutSec 5
+            if ($ui.StatusCode -ne 200) { throw "首页状态码 $($ui.StatusCode)" }
+            if ($ui.Content -notmatch '<div id="root">') { throw "首页不像前端产物" }
+            Write-Host "首页 ok: $($ui.RawContentLength) 字节"
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: 打包（windows：便携 zip + MSI）
+        if: matrix.name == 'windows-x64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.*)"').Matches[0].Groups[1].Value
+          $stage = "pkg\kuake-studio-$ver-windows-x64"
+          Write-Host "版本 $ver -> $stage"
+
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "target\release\kuake-studio.exe" $stage
+          Copy-Item "run.bat" $stage
+          Copy-Item "README.md" $stage
+          Copy-Item -Recurse "frontend\dist" "$stage\dist"
+
+          # 便携版：解压即用（exe 旁边的 dist 会被 default_dist() 优先认）
+          Compress-Archive -Path "$stage\*" -DestinationPath "pkg\kuake-studio-$ver-windows-x64.zip" -Force
+          Write-Host "zip: $((Get-Item "pkg\kuake-studio-$ver-windows-x64.zip").Length) 字节"
+
+          # 安装包：heat 收文件清单 -> candle 编 -> light 链接
+          $wix = $null
+          foreach ($c in @($env:WIX, "C:\Program Files (x86)\WiX Toolset v3.14\bin", "C:\Program Files (x86)\WiX Toolset v3.11\bin")) {
+            if ($c -and (Test-Path (Join-Path $c "candle.exe"))) { $wix = $c; break }
+          }
+          if (-not $wix) {
+            choco install wixtoolset --no-progress -y
+            $wix = "C:\Program Files (x86)\WiX Toolset v3.14\bin"
+          }
+          Write-Host "WiX: $wix"
+          $pkgDir = (Resolve-Path $stage).Path
+          $ico = (Resolve-Path "assets\kuake-studio.ico").Path
+
+          & "$wix\heat.exe" dir $pkgDir -cg Payload -dr INSTALLFOLDER `
+              -gg -srd -var var.PkgDir -out wix\gen.wxs
+          if ($LASTEXITCODE -ne 0) { throw "heat 失败: $LASTEXITCODE" }
+
+          & "$wix\candle.exe" -arch x64 "-dVersion=$ver" "-dPkgDir=$pkgDir" "-dIcoPath=$ico" `
+              -out wix\ wix\main.wxs wix\gen.wxs
+          if ($LASTEXITCODE -ne 0) { throw "candle 失败: $LASTEXITCODE" }
+
+          & "$wix\light.exe" -sval -out "pkg\kuake-studio-$ver-windows-x64.msi" `
+              wix\main.wixobj wix\gen.wixobj
+          if ($LASTEXITCODE -ne 0) { throw "light 失败: $LASTEXITCODE" }
+
+          Write-Host "msi: $((Get-Item "pkg\kuake-studio-$ver-windows-x64.msi").Length) 字节"
+
+      # ── Linux ───────────────────────────────────────────────────────
+      - name: 构建（linux）
+        if: matrix.name == 'linux-x64'
+        run: cargo build --release --locked --bin kuake-studio
+
+      - name: 自检（linux）
+        if: matrix.name == 'linux-x64'
+        run: |
+          set -euo pipefail
+          exe=target/release/kuake-studio
+          cmds=$($exe --schema | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+          echo "schema 命令数: $cmds"
+          test "$cmds" -ge 17
+
+          KUAKE_STUDIO_NO_OPEN=1 KUAKE_STUDIO_PORT=8791 ./target/release/kuake-studio &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true' EXIT
+          for i in $(seq 1 40); do
+            sleep 0.25
+            if curl -sf http://127.0.0.1:8791/api/boot > /tmp/boot.json; then break; fi
+          done
+          python3 -c 'import json; d=json.load(open("/tmp/boot.json")); assert d["name"]=="kuake-studio", d; print("boot ok:", d["name"], d["version"])'
+          curl -sf http://127.0.0.1:8791/ | grep -q '<div id="root">'
+          echo "首页 ok"
+
+      - name: 打包（linux：tar.gz）
+        if: matrix.name == 'linux-x64'
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          stage="pkg/kuake-studio-$ver-linux-x64"
+          mkdir -p "$stage"
+          cp target/release/kuake-studio "$stage/"
+          cp README.md "$stage/"
+          cp assets/kuake-studio.desktop assets/kuake-studio-1024.png "$stage/"
+          cp -r frontend/dist "$stage/dist"
+          # 便携版启动器：不能用仓库里的 run.sh（它写死了本机共享 target 路径）
+          cat > "$stage/start.sh" <<'EOS'
+          #!/usr/bin/env bash
+          # cd 到自身目录，让 kuake-studio 找到同级的 dist/
+          cd "$(dirname "$0")" || exit 1
+          exec ./kuake-studio "$@"
+          EOS
+          chmod +x "$stage/start.sh" "$stage/kuake-studio"
+          tar -C pkg -czf "pkg/kuake-studio-$ver-linux-x64.tar.gz" "kuake-studio-$ver-linux-x64"
+          ls -l pkg/
+
+      # ── macOS ───────────────────────────────────────────────────────
+      - name: 构建（macos：两个架构 + lipo 合成通用二进制）
+        if: matrix.name == 'macos-universal'
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --bin kuake-studio --target aarch64-apple-darwin
+          cargo build --release --locked --bin kuake-studio --target x86_64-apple-darwin
+          mkdir -p target/universal
+          lipo -create -output target/universal/kuake-studio \
+            target/aarch64-apple-darwin/release/kuake-studio \
+            target/x86_64-apple-darwin/release/kuake-studio
+          lipo -info target/universal/kuake-studio
+          file target/universal/kuake-studio
+
+      - name: 自检（macos）
+        if: matrix.name == 'macos-universal'
+        run: |
+          set -euo pipefail
+          exe=target/universal/kuake-studio
+          cmds=$($exe --schema | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+          echo "schema 命令数: $cmds"
+          test "$cmds" -ge 17
+
+      - name: 打包（macos：通用 tar.gz + .app）
+        if: matrix.name == 'macos-universal'
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          stage="pkg/kuake-studio-$ver-macos-universal"
+          mkdir -p "$stage"
+          cp target/universal/kuake-studio "$stage/"
+          cp README.md "$stage/"
+          cp -r frontend/dist "$stage/dist"
+
+          # .app 包：exe 放在 Contents/MacOS/ 下，dist 也放这儿（default_dist 认 exe 同级 dist）
+          app="pkg/kuake-studio-$ver-macos-universal/kuake-studio.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp target/universal/kuake-studio "$app/Contents/MacOS/"
+          cp -r frontend/dist "$app/Contents/MacOS/dist"
+
+          # 从 1024 png 生成 icns
+          iconset="$RUNNER_TEMP/AppIcon.iconset"
+          rm -rf "$iconset"; mkdir -p "$iconset"
+          for sz in 16 32 128 256 512; do
+            sips -z $sz $sz assets/kuake-studio-1024.png --out "$iconset/icon_${sz}x${sz}.png" >/dev/null
+            dbl=$((sz * 2))
+            sips -z $dbl $dbl assets/kuake-studio-1024.png --out "$iconset/icon_${sz}x${sz}@2x.png" >/dev/null
+          done
+          iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
+
+          cat > "$app/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>kuake-studio</string>
+            <key>CFBundleDisplayName</key><string>kuake-studio</string>
+            <key>CFBundleIdentifier</key><string>dev.lilyco.kuake-studio</string>
+            <key>CFBundleVersion</key><string>VER_PLACEHOLDER</string>
+            <key>CFBundleShortVersionString</key><string>VER_PLACEHOLDER</string>
+            <key>CFBundleExecutable</key><string>kuake-studio</string>
+            <key>CFBundleIconFile</key><string>AppIcon</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          sed -i '' "s/VER_PLACEHOLDER/$ver/g" "$app/Contents/Info.plist"
+          # 未签名：去掉隔离标记后可直接双击
+          codesign --force --deep --sign - "$app" || echo "ad-hoc 签名失败，不影响使用"
+
+          tar -C pkg -czf "pkg/kuake-studio-$ver-macos-universal.tar.gz" "kuake-studio-$ver-macos-universal"
+          ls -l pkg/
+
+      # ── 收集产物 ────────────────────────────────────────────────────
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            pkg/*.zip
+            pkg/*.msi
+            pkg/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  # ── 打标签时发布到 Releases ──────────────────────────────────────────
+  release:
+    name: release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 列产物
+        run: ls -lR dist
+
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "发布 $TAG 到 $REPO"
+          if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* -R "$REPO" --clobber
+          else
+            gh release create "$TAG" dist/* -R "$REPO" \
+              --title "kuake-studio $TAG" \
+              --notes "夸克网盘桌面客户端 $TAG。
+
+          - Windows：`kuake-studio-*-windows-x64.zip`（解压即用）/ `*.msi`（安装包）
+          - Linux：`kuake-studio-*-linux-x64.tar.gz`（解压后 `./kuake-studio`）
+          - macOS：`kuake-studio-*-macos-universal.tar.gz` 或解压出的 `kuake-studio.app`（未签名，首次打开需右键 → 打开）
+
+          首次运行需要夸克 cookie：设置 `KUAKE_COOKIE`，或写进 `~/.config/kuake/.env`。
+          `kuake` 命令行本体需自行安装（客户端会调用它）。"
+          fi

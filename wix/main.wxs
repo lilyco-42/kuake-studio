@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  kuake-studio 的 Windows 安装包（WiX Toolset v3）。
+
+  candle 调用时传入：
+    -dVersion=0.1.0      Cargo.toml 里的版本
+    -dPkgDir=<abs path>  打包暂存目录（里面是 kuake-studio.exe 和 dist/）
+    -dIcoPath=<abs path> assets/kuake-studio.ico
+
+  真正的文件清单由 heat.exe 从暂存目录生成到 wix/gen.wxs（ComponentGroup Id="Payload"），
+  所以这里只声明目录结构、开始菜单快捷方式和 ARP 图标。
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+      Id="*"
+      Name="kuake-studio"
+      Language="1033"
+      Version="$(var.Version)"
+      Manufacturer="lilyco-42"
+      UpgradeCode="B7F3C2A1-6E4D-4C8B-9A21-5D3E8F7C1B42">
+
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of kuake-studio is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon" SourceFile="$(var.IcoPath)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="kuake-studio" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppMenuFolder" Name="kuake-studio" />
+      </Directory>
+    </Directory>
+
+    <!-- 开始菜单快捷方式。目标用 [INSTALLFOLDER]kuake-studio.exe（非广告式快捷方式），
+         组件的 KeyPath 是 HKCU 下的一条注册表值，卸载时随组件一起清掉。 -->
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="ShortcutComp" Guid="*">
+        <RegistryValue Root="HKCU"
+                       Key="Software\lilyco-42\kuake-studio"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+        <Shortcut Id="StartMenuShortcut"
+                  Directory="AppMenuFolder"
+                  Name="kuake-studio"
+                  Description="Quark Drive client"
+                  Target="[INSTALLFOLDER]kuake-studio.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveAppMenuFolder" Directory="AppMenuFolder" On="uninstall" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Main" Title="kuake-studio" Level="1">
+      <ComponentRef Id="ShortcutComp" />
+      <ComponentGroupRef Id="Payload" />
+    </Feature>
+  </Product>
+</Wix>

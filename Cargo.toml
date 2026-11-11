@@ -1,0 +1,35 @@
+[package]
+name = "kuake-studio"
+version = "0.1.0"
+edition = "2021"
+description = "Quark 网盘桌面客户端 —— lilyco 框架（Registry/App/Safety）+ shadcn/ui 前端"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "kuake-studio"
+path = "src/main.rs"
+
+[dependencies]
+# lilyco 门面：默认特性 = CLI + MCP + core（纯 Rust，无图形重依赖）
+# 用到的只有核心层：App / Registry / SafetyPolicy / executor / Progress
+#
+# CI 里必须用 git 依赖（不能写本机绝对路径）。crates.io 上的 lilyco 只到 0.2.3，
+# 而这里用到的 ValueEnum / safety::Interactive 是 0.3.0 才有的，所以钉死 git rev。
+# 本地开发想改 lilyco 源码时，临时换回 path 依赖即可（改完别提交）。
+lilyco = { git = "https://github.com/lilyco-42/lilyco", rev = "3f5ce094a893bd22debb435994e8c885a00e1571" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 自建 Web 宿主（不复用 lilyco-gui 的页面，只借用它的执行/取消/进度语义）
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+async-stream = "0.3"
+rand = "0.8"
+# 上传前加密插件（src/crypt.rs）：AES-256-GCM 分块 + PBKDF2-HMAC-SHA256 派生密钥
+aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha2 = "0.10"
+
+[build-dependencies]
+# 只在目标平台是 Windows 时生效（见 build.rs）：把 assets/kuake-studio.rc
+# 里的 exe 图标 + 版本信息编进二进制。其他平台是空操作。
+embed-resource = "3"
