@@ -278,6 +278,8 @@ jobs:
         if: matrix.name == 'macos-universal'
         run: |
           set -euo pipefail
+          # bsdtar 默认给带扩展属性的文件塞 ._ 副本，打进 tar 就是垃圾；禁掉
+          export COPYFILE_DISABLE=1
           ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           stage="pkg/kuake-studio-$ver-macos-universal"
           mkdir -p "$stage"
@@ -323,6 +325,7 @@ jobs:
           # 未签名：去掉隔离标记后可直接双击
           codesign --force --deep --sign - "$app" || echo "ad-hoc 签名失败，不影响使用"
 
+          find "$stage" -name '._*' -delete
           tar -C pkg -czf "pkg/kuake-studio-$ver-macos-universal.tar.gz" "kuake-studio-$ver-macos-universal"
           ls -l pkg/
 
@@ -360,17 +363,23 @@ jobs:
         run: |
           set -euo pipefail
           echo "发布 $TAG 到 $REPO"
+          # 用 --notes-file + 单引号：--notes "..." 里的反引号会被 bash 当命令替换吃掉，文案里的文件名会整个消失
+          {
+            echo "夸克网盘桌面客户端 $TAG。"
+            echo
+            printf '%s\n' \
+              '- Windows：`kuake-studio-*-windows-x64.zip`（解压即用）/ `*.msi`（安装包）' \
+              '- Linux：`kuake-studio-*-linux-x64.tar.gz`（解压后 `./start.sh`）' \
+              '- macOS：`kuake-studio-*-macos-universal.tar.gz` 或解压出的 `kuake-studio.app`（未签名，首次打开需右键 → 打开）' \
+              '' \
+              '首次运行需要夸克 cookie：设置 `KUAKE_COOKIE`，或写进 `~/.config/kuake/.env`。' \
+              '`kuake` 命令行本体需自行安装（客户端会调用它）。'
+          } > release-notes.md
           if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* -R "$REPO" --clobber
+            gh release edit "$TAG" -R "$REPO" --notes-file release-notes.md
           else
             gh release create "$TAG" dist/* -R "$REPO" \
               --title "kuake-studio $TAG" \
-              --notes "夸克网盘桌面客户端 $TAG。
-
-          - Windows：`kuake-studio-*-windows-x64.zip`（解压即用）/ `*.msi`（安装包）
-          - Linux：`kuake-studio-*-linux-x64.tar.gz`（解压后 `./kuake-studio`）
-          - macOS：`kuake-studio-*-macos-universal.tar.gz` 或解压出的 `kuake-studio.app`（未签名，首次打开需右键 → 打开）
-
-          首次运行需要夸克 cookie：设置 `KUAKE_COOKIE`，或写进 `~/.config/kuake/.env`。
-          `kuake` 命令行本体需自行安装（客户端会调用它）。"
+              --notes-file release-notes.md
           fi
