@@ -14,7 +14,7 @@
 
 | 平台 | 包 | 用法 |
 | --- | --- | --- |
-| Windows | `*-windows-x64.msi` | 双击安装，开始菜单里点 kuake-studio |
+| Windows | `*-windows-x64.msi` | 双击安装，开始菜单里点 kuake-studio；卸载前先退出 exe |
 | Windows | `*-windows-x64.zip` | 解压后双击 `run.bat`（便携，不写注册表） |
 | Linux | `*-linux-x64.tar.gz` | 解压后 `./start.sh`，或把 `kuake-studio` + `dist/` 一起放任意目录 |
 | macOS | `*-macos-universal.tar.gz` | 解压后双击 `kuake-studio.app`（未签名，首次打开需右键 → 打开），或 `./kuake-studio` |
@@ -176,6 +176,31 @@ cd ~/code/kuake-studio/tools
 想手动出包：Actions → build → Run workflow（填 tag 会顺带发布）。
 前端 `bun.lock` 里钉的是国内镜像，CI 里会先替换成 npmjs 官方源再 frozen 安装。
 
+## 实测记录：Windows 包在 Wine 里跑过
+
+发布后用 **Wine 11.21**（win64 prefix）真跑了 `v0.1.0` 的 Windows 产物，不只是交叉编译检查：
+
+| 项目 | 结果 |
+| --- | --- |
+| 便携包 `.zip` | `--schema` 返回 17 条命令；起在 8791 后 `/api/boot`、`/`、`dist` 静态资源、`/api/schema` 全 200 |
+| 回环安全闸 | 无令牌 POST → 401；伪造 Origin → 403；未知命令 / 缺必填 → 400 |
+| CLI 的 Windows 分支 | `encrypt` / `decrypt` 2.5 MB 随机文件（3 块）往返，`cmp` 与原文一致；`--help` 正常 |
+| SSE 进度 | `POST /api/run` → `GET /api/progress/{sid}` 收到 3 个 tick + done，日志含 KDF 轮数 |
+| MSI 安装 | 独立 prefix 静默安装 → 6 个文件齐全、开始菜单快捷方式、注册表 DisplayName/Version；安装版起 8793 正常 |
+| MSI 卸载 | **装完不启动 exe 直接卸载**：安装目录完全删除，快捷方式与注册表清空 |
+| 真实网盘闭环 | 交叉编译 `kuake.exe`（Go `GOOS=windows GOARCH=amd64`）后：`user` / `list` / `info` / `share-list` / `download` 全 OK；2.5 MB 文件加密上传 → 回下 → 解密 → `cmp` 与原文件一致 |
+| 前端 UI | Linux Chrome 直连 Wine 后端：文件 / 分享 / 账号三视图渲染，上传对话框与「上传前加密」开关可用，控制台 0 报错 |
+
+![Wine 里的文件视图](screenshot-wine-files.png)
+
+三个边界：
+
+1. 这是 **Wine 11.21**，不是真 Windows 机器；真机上的 MSI 升级路径未验。
+2. Windows 包**不含 `kuake.exe`**（上游只发源码，本项目不重分发）。实测用上面那条 Go 命令
+   编译出 exe 后由 `KUAKE_BIN` 指过去；否则每个网盘命令都会报
+   `无法启动 kuake（kuake）：program not found`。
+3. 静默卸载时若 `kuake-studio.exe` 仍在运行，Windows/Wine 会跳过删除该 exe 并留下空壳目录：
+   先退出客户端（或任务管理器结束进程）再卸载即可。干净复测已证明 WiX 包本身卸载干净。
 ## 目录
 
 ```
