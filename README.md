@@ -158,6 +158,27 @@ cd ~/code/kuake-studio/tools
 > 坑：写进 .env 的 `KUAKE_COOKIE` 值**必须用单引号包裹**——cookie 里有空格和分号，
 > 裸写会被 `source` 拆成多条命令。脚本与扫码登录都已处理，手改时别丢引号。
 
+### 采集 kuake CLI 的 JSON 形状（排障/对照）
+
+原生后端逐字复刻 kuake CLI 的 `{success,code,message,data}` 信封。若夸克接口改版、想对照真实形状，
+可以一键把本机 kuake CLI 的 JSON 输出 dump 成快照：
+
+```bash
+cd ~/code/kuake-studio/tools
+./dump-kuake-cli-json.mjs                 # 原始快照写到 ~/.local/share/kuake-studio/（600）
+./dump-kuake-cli-json.mjs --redact-only  # 只写脱敏副本，适合贴 issue / 提交文档
+./dump-kuake-cli-json.mjs --markdown      # 重新生成 docs/kuake-cli-json-shapes.md
+./dump-kuake-cli-json.mjs --stdout       # 只往 stdout 打印脱敏 JSON
+```
+
+脚本跑 13 个**只读**用例（`version` / `user` / `list` / `info` / `share-list` / 只取下载地址的
+`download` / `list --stream` NDJSON / 4 个缺参错误），另外把 `kuake help` 的 usage 文本（走 stderr）
+一并收进快照。签名直链、fid、stoken、昵称、文件名、路径等敏感字段在脱敏副本里替换成 `<redacted>` / `<path>`，
+倒计时与服务器时间戳归一成 `<volatile>`，因此 `--markdown` 反复生成零 diff；偶发 401 会重试，拿不到稳定信封就直接报错而不是写半成品。
+完整脱敏形状见 [`docs/kuake-cli-json-shapes.md`](docs/kuake-cli-json-shapes.md)。
+
+> 原始快照含可短期复用的下载签名直链与分享信息，权限 600、默认路径在仓库外，**不要提交进 git**。
+
 ## 上传前加密（.kcrypt）
 
 网盘不该看到你的明文。上传对话框里打开「上传前加密」，填一个口令，文件会先在**本机**
@@ -298,6 +319,7 @@ build.rs          Windows 目标嵌 exe 图标与版本信息
 wix/main.wxs      WiX v3 安装包源（文件清单由 heat 生成）
 .github/workflows/build.yml   三平台 CI / 出包 / 发 Release
 tools/dump-cookies.mjs  从本机 Chrome cookie 库解出夸克 cookie 并刷新 ~/.config/kuake/.env
+tools/dump-kuake-cli-json.mjs  采集 kuake CLI 的 JSON/NDJSON 信封（原图 600 / 脱敏副本）
 frontend/src/components/ui/   shadcn/ui 组件（基于 radix-ui 聚合包手写）
 frontend/src/components/      schema-form / command-dialog / login-dialog / 文件表格 / 控制台
 frontend/src/lib/             api / store / types / format

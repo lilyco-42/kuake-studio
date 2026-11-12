@@ -13,6 +13,8 @@
 
 # 构建产物与临时文件
 *.log
+kuake-cli-json*.json
+*.redacted.json
 *.msi
 *.wixobj
 *.wixpdb
