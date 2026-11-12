@@ -375,6 +375,8 @@ jobs:
           export PATH="/tmp/zig-sdk:$PATH"
           zig version
           export CC_aarch64_linux_android="$PWD/tools/cc-aarch64-musl.sh"
+          # cc-rs 对 android 目标会探测 llvm-ar，失败就拼 ${target}-ar；runner 两者都无 → 显式用 GNU ar（只打包 .a，不链接）
+          export AR_aarch64_linux_android=ar
           cargo build --release --locked --no-default-features --lib --target aarch64-linux-android
 
       # ── iOS (arm64)：只有 macOS runner 有 Xcode / iPhoneOS SDK / xcrun ──────
@@ -402,7 +404,9 @@ jobs:
           tar -xJf /tmp/zig.tar.xz -C /tmp/zig-sdk --strip-components=1
           export PATH="/tmp/zig-sdk:$PATH"
           zig version
+          # 与 Android 同理：显式指定归档器，避免 runner 镜像变化后 cc-rs 拼出不存在的交叉 ar
           export CC_aarch64_unknown_linux_ohos="$PWD/tools/cc-aarch64-musl.sh"
+          export AR_aarch64_unknown_linux_ohos=ar
           cargo build --release --locked --no-default-features --lib --target aarch64-unknown-linux-ohos
 
       - name: 自检（native：纯 arm64 归档 + C ABI 符号）
@@ -451,6 +455,9 @@ jobs:
           - include/kuake_studio.h：头文件
           - tools/abi-selftest.c：host 架构可编译运行的 ABI 自检
           - tools/cc-aarch64-musl.sh：Android / 鸿蒙 C 代码交叉编译 wrapper（zig cc）
+          - 复现构建：rustup target add <target> + zig 0.17.1，设 CC_<target> 指向本 wrapper；
+            Android 还需 AR_aarch64_linux_android=ar（cc-rs 在 runner 上找不到 ${target}-ar），
+            cargo build --release --no-default-features --lib --target <target>
           - BUILD_INFO.txt：版本 / Rust target / 构建方式
 
           宿主 App（Android Kotlin/JNI、iOS Swift、鸿蒙 ArkTS/NAPI）把 .a 链进原生层，

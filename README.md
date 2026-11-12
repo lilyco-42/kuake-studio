@@ -92,6 +92,7 @@ cd .. && ./run.sh                  # 开发时用本机共享 target
 rustup target add aarch64-linux-android   # 或 aarch64-apple-ios / aarch64-unknown-linux-ohos
 # Android / 鸿蒙：用 zig 0.17.1 的 aarch64 musl sysroot 交叉编 ring 的 C（见 CI）
 CC_aarch64_linux_android="$PWD/tools/cc-aarch64-musl.sh" \
+  AR_aarch64_linux_android=ar \
   cargo build --release --no-default-features --lib --target aarch64-linux-android
 ```
 
@@ -359,6 +360,9 @@ cd ~/code/kuake-studio/tools
    - **android-arm64 / ohos-arm64**：ubuntu runner 下载 zig 0.17.1，用
      `tools/cc-aarch64-musl.sh`（`zig cc -target aarch64-linux-musl` 并丢掉 cc-rs 追加的
      `--target=<triple>`，因为 zig 不认 ohos 三元组）交叉编 ring 的 C。
+     同时显式 `AR_<target>=ar`：`cc-rs` 对 android 目标先探测 `llvm-ar`，失败就拼 `${target}-ar`；
+     CI runner 两者都没有（首个 push 的 android job 报 `failed to find tool "aarch64-linux-android-ar"`）。
+     GNU `ar` 只把 `.o` 打进 `.a`，跨平台打包无需专用归档器；修后逐个 `.o` 复验仍全是 arm64。
    - **ios-arm64**：macos runner 的 Xcode / `xcrun --sdk iphoneos` 提供 iPhoneOS SDK。
    - `rustup target add` 对应 Rust 官方 target（`aarch64-linux-android` / `aarch64-apple-ios` / `aarch64-unknown-linux-ohos`）。
 3. `release`：打 `v*` 标签时把**六平台产物**传到 GitHub Release。
