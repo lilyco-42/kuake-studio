@@ -72,7 +72,13 @@ type DialogState =
   | { kind: "decrypt"; target: KuakeFile };
 
 /** 当前浏览目录 + 文件列表。所有操作完成后都回到这里刷新。 */
-export function FilesView({ schemas }: { schemas: CommandSchema[] }) {
+export function FilesView({
+  schemas,
+  jump,
+}: {
+  schemas: CommandSchema[];
+  jump?: { path: string; nonce: number } | null;
+}) {
   const { run, booted } = useRunner();
   const [dir, setDir] = React.useState<DirState>({
     path: "/",
@@ -115,10 +121,14 @@ export function FilesView({ schemas }: { schemas: CommandSchema[] }) {
     [run, dir.path],
   );
 
+  // 搜索页「跳到所在目录」会带一个递增 nonce；初始挂载仍从根开始。
+  const navNonce = jump?.nonce ?? 0;
+  const navPath = jump?.path ?? "/";
+
   React.useEffect(() => {
-    if (booted) void load("/");
+    if (booted) void load(navPath, navNonce > 0 ? { pushHistory: true } : undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [booted]);
+  }, [booted, navNonce]);
 
   const sorted = React.useMemo(() => {
     const items = [...dir.items];

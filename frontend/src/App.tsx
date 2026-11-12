@@ -1,9 +1,10 @@
 import * as React from "react";
-import { Cloud, FolderTree, Info, Link2, Loader2, Moon, Sun, User } from "lucide-react";
+import { Cloud, FolderTree, Info, Link2, Loader2, Moon, Sun, Search as SearchIcon, User } from "lucide-react";
 
 import { ConsolePanel } from "@/components/console-panel";
 import { AccountView } from "@/components/views/account-view";
 import { FilesView } from "@/components/views/files-view";
+import { SearchView } from "@/components/views/search-view";
 import { SharesView } from "@/components/views/shares-view";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,15 +12,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useRunner } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
-type Tab = "files" | "shares" | "account";
+type Tab = "files" | "search" | "shares" | "account";
 
 function readHash(): Tab {
   const h = location.hash.replace(/^#/, "");
-  return h === "shares" || h === "account" ? h : "files";
+  return h === "search" || h === "shares" || h === "account" ? h : "files";
 }
 
 const NAV: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "files", label: "文件", icon: FolderTree },
+  { id: "search", label: "搜索", icon: SearchIcon },
   { id: "shares", label: "分享", icon: Link2 },
   { id: "account", label: "账号", icon: User },
 ];
@@ -27,12 +29,25 @@ const NAV: { id: Tab; label: string; icon: React.ComponentType<{ className?: str
 export default function App() {
   const { booted, bootError, info, schemas, logs } = useRunner();
   const [tab, setTabState] = React.useState<Tab>(() => readHash());
+  // 「搜索 → 跳到所在目录」：用递增 nonce 让 FilesView 重新拉指定目录
+  const [filesJump, setFilesJump] = React.useState<{ path: string; nonce: number } | null>(null);
+  const jumpSeq = React.useRef(0);
 
   // 用 location.hash 记住当前页（刷新/直达链接都落在同一页）
   const setTab = React.useCallback((t: Tab) => {
     setTabState(t);
+    if (t !== "files") setFilesJump(null);
     if (location.hash !== "#" + t) history.replaceState(null, "", "#" + t);
   }, []);
+
+  const openDir = React.useCallback(
+    (path: string) => {
+      jumpSeq.current += 1;
+      setFilesJump({ path, nonce: jumpSeq.current });
+      setTab("files");
+    },
+    [setTab],
+  );
 
   React.useEffect(() => {
     const onHash = () => setTabState(readHash());
@@ -52,6 +67,8 @@ export default function App() {
 
   // 切到分享页时给出提示：分享列表依赖 share-list 命令
   const hasShares = schemas.some((s) => s.name === "share-list");
+  // cli 回退模式下真 kuake 没有 search，侧栏直接禁用而不是让用户撞一鼻子错误
+  const hasSearch = info?.backend !== "cli";
 
   if (bootError) {
     return (
@@ -102,13 +119,14 @@ export default function App() {
             {NAV.map((n) => {
               const Icon = n.icon;
               const active = tab === n.id;
-              const disabled = n.id === "shares" && !hasShares;
+              const disabled =
+                (n.id === "shares" && !hasShares) || (n.id === "search" && !hasSearch);
               return (
                 <button
                   key={n.id}
                   disabled={disabled}
                   onClick={() => setTab(n.id)}
-                  title={n.label}
+                  title={n.id === "search" && !hasSearch ? "搜索仅在内置原生后端可用" : n.label}
                   className={cn(
                     "flex items-center gap-2.5 rounded-md px-2 py-2 text-sm transition-colors",
                     "justify-center md:justify-start",
@@ -139,7 +157,7 @@ export default function App() {
             <div className="hidden px-2 pb-1 text-[10.5px] leading-4 text-muted-foreground md:block">
               <p className="truncate">{info?.name ?? "kuake-studio"}</p>
               <p className="truncate">
-                kuake {info?.kuake ? "CLI" : "—"} · v{info?.version ?? "?"}
+                {info?.backend === "cli" ? "kuake CLI 子进程" : "内置原生 API"} · v{info?.version ?? "?"}
               </p>
             </div>
           </div>
@@ -177,7 +195,9 @@ export default function App() {
               <Skeleton className="h-40 w-full" />
             </div>
           ) : tab === "files" ? (
-            <FilesView schemas={schemas} />
+            <FilesView schemas={schemas} jump={filesJump} />
+          ) : tab === "search" ? (
+            <SearchView onOpenDir={openDir} />
           ) : tab === "shares" ? (
             <SharesView schemas={schemas} />
           ) : (

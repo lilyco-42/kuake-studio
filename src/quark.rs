@@ -1,13 +1,14 @@
 //! 自研夸克网盘 API 后端（不依赖本机 kuake CLI 子进程）。
 //!
-//! 这里只实现 kuake-studio 的 15 条网盘命令所覆盖的官方 HTTP 接口：
-//! 账号 / 列表 / 详情 / 增删改 / 分享 / 上传 / 下载 / 转存。
+//! 这里只实现 kuake-studio 的 16 条网盘命令所覆盖的官方 HTTP 接口：
+//! 账号 / 列表 / 详情 / 增删改 / 分享 / 上传 / 下载 / 转存 / 全盘搜索。
 //! 返回值逐字复刻 kuake CLI 的 JSON 信封 {success,code,message,data}，
 //! 因此 src/apps.rs、前端、SSE、MCP、--schema 全都不需要改动。
 //!
 //! 请求/响应形状来自公开接口实测（/tmp/quark-research/proto*.mjs），
 //! 仅对照 AGPL 的 kuake_cli 源码做**语义**核对，未复制其任何代码。
 
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -908,6 +909,7 @@ pub fn dispatch(ctx: &Context, argv: &[String]) -> Result<Value, AppError> {
             json!({ "version": format!("native {}", env!("CARGO_PKG_VERSION")) }),
         )),
         "list" => cmd_list(&api, argv),
+        "search" => cmd_search(&api, argv),
         "info" => cmd_info(&api, argv),
         "download" => cmd_download(ctx, &api, argv),
         "share-list" => cmd_share_list(&api, argv),
@@ -968,6 +970,164 @@ fn cmd_list(api: &Api, argv: &[String]) -> Result<Value, AppError> {
         vec![e.to_list_item()]
     };
     Ok(ok("列出目录成功", json!({ "list": items })))
+}
+
+/// 按 pdir_fid 逐级反查到根，拼出可直接喂给 download/rename/move/copy/info 的完整路径。
+/// `lookup(fid) -> (文件名, 上一级 fid)` 由调用方提供（带缓存 + 网络），这里只做纯逻辑，
+/// 因此能用假的祖先链离线单测。返回 (path, complete)：complete=false 表示链断了或成环，
+/// 调用方必须把 path 视为不可用，绝不能拿半截路径去跑写操作。
+fn build_search_path<F>(pdir: &str, name: &str, max_depth: usize, mut lookup: F) -> (String, bool)
+where
+    F: FnMut(&str) -> Option<(String, String)>,
+{
+    let mut names = vec![name.to_string()];
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut cur = pdir.to_string();
+    let mut complete = true;
+    while !is_root(&cur) {
+        if names.len() > max_depth || !seen.insert(cur.clone()) {
+            complete = false;
+            break;
+        }
+        match lookup(&cur) {
+            Some((parent_name, parent_fid)) if !parent_name.is_empty() => {
+                names.push(parent_name);
+                cur = parent_fid;
+            }
+            _ => {
+                complete = false;
+                break;
+            }
+        }
+    }
+    names.reverse();
+    let path = names
+        .iter()
+        .fold(String::new(), |acc, n| path_join(&acc, n));
+    (path, complete)
+}
+
+/// 数值参数：留空用默认，非法报 InvalidArg，越界收敛到 [lo, hi]。
+fn arg_num(raw: &str, default: u32, lo: u32, hi: u32, name: &str) -> Result<u32, AppError> {
+    if raw.trim().is_empty() {
+        return Ok(default);
+    }
+    let n: u32 = raw
+        .trim()
+        .parse()
+        .map_err(|_| AppError::InvalidArg(format!("{name} 必须是数字")))?;
+    Ok(n.clamp(lo, hi))
+}
+
+/// 全盘搜索（kuake CLI 没有这条命令，是本项目自研扩展）。
+///
+/// 官方 /file/search 只回 fid/pdir_fid，不回 path，也不回 total；这里沿 pdir_fid
+/// 用 /file/info 逐级反查祖先拼出完整路径，让所有基于路径的命令原样复用。
+/// 同一次搜索里祖先高度重合，所以按 fid 缓存；失败只把单条标成 path_partial，
+/// 不拖垮整次搜索。
+fn cmd_search(api: &Api, argv: &[String]) -> Result<Value, AppError> {
+    let q = need(argv, 1, "q")?.trim();
+    if q.is_empty() {
+        return Err(AppError::InvalidArg("搜索关键词不能为空".into()));
+    }
+    let page = arg_num(opt(argv, 2), 1, 1, 1000, "page")?;
+    let size = arg_num(opt(argv, 3), 50, 1, 100, "size")?;
+
+    let mut extra = Api::dt_t();
+    extra.push(("q", q.to_string()));
+    extra.push(("_page", page.to_string()));
+    extra.push(("_size", size.to_string()));
+    extra.push(("_fetch_total", "1".to_string()));
+    extra.push(("_sort", "file_type:desc,updated_at:desc".to_string()));
+    extra.push(("_is_hl", "1".to_string()));
+    let v = api.get("/1/clouddrive/file/search", &extra)?;
+    let data = data_of(&v)?;
+    let raw_list: Vec<Value> = data
+        .get("list")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let n = raw_list.len();
+
+    // fid → Some((名字, 父 fid)) / None（查不到也缓存，避免重复打同一个失败请求）。
+    let mut cache: HashMap<String, Option<(String, String)>> = HashMap::new();
+    let mut budget: usize = 150; // 一次搜索最多打 150 次 /file/info，防异常目录树拖死
+    let mut lookup = |fid: &str| -> Option<(String, String)> {
+        if let Some(hit) = cache.get(fid) {
+            return hit.clone();
+        }
+        if budget == 0 {
+            return None;
+        }
+        budget -= 1;
+        let mut ex = Api::dt_t();
+        ex.push(("fid", fid.to_string()));
+        let got = api
+            .get("/1/clouddrive/file/info", &ex)
+            .ok()
+            .and_then(|resp| data_of(&resp).ok())
+            .and_then(|d| {
+                let name = decode_name(&as_str(d.get("file_name").unwrap_or(&Value::Null)));
+                let parent = as_str(d.get("pdir_fid").unwrap_or(&Value::Null));
+                if name.is_empty() {
+                    None
+                } else {
+                    Some((name, parent))
+                }
+            });
+        cache.insert(fid.to_string(), got.clone());
+        got
+    };
+
+    let mut items = Vec::with_capacity(n);
+    for item in &raw_list {
+        let name = decode_name(&as_str(item.get("file_name").unwrap_or(&Value::Null)));
+        let pdir = as_str(item.get("pdir_fid").unwrap_or(&Value::Null));
+        let (path, complete) = build_search_path(&pdir, &name, 12, &mut lookup);
+        let created = as_i64(item.get("created_at").unwrap_or(&Value::Null));
+        let updated = as_i64(item.get("updated_at").unwrap_or(&Value::Null));
+        let entry = Entry {
+            fid: as_str(item.get("fid").unwrap_or(&Value::Null)),
+            name,
+            path: if complete { path } else { String::new() },
+            size: as_i64(item.get("size").unwrap_or(&Value::Null)),
+            dir: as_bool(item.get("dir").unwrap_or(&Value::Null))
+                .unwrap_or_else(|| !item.get("file").and_then(Value::as_bool).unwrap_or(false)),
+            created_at: if created > 0 {
+                created
+            } else {
+                as_i64(item.get("l_created_at").unwrap_or(&Value::Null))
+            },
+            updated_at: if updated > 0 {
+                updated
+            } else {
+                as_i64(item.get("l_updated_at").unwrap_or(&Value::Null))
+            },
+        };
+        let mut obj = entry.to_list_item();
+        if let Some(m) = obj.as_object_mut() {
+            let hl = as_str(item.get("hl_file_name").unwrap_or(&Value::Null));
+            if !hl.is_empty() {
+                m.insert("hl_file_name".into(), json!(hl));
+            }
+            if !complete {
+                m.insert("path_partial".into(), json!(true));
+            }
+        }
+        items.push(obj);
+    }
+
+    Ok(ok(
+        "搜索文件成功",
+        json!({
+            "list": items,
+            "q": q,
+            "page": page,
+            "size": size,
+            // 接口不回 total：满页就认为可能还有下一页（短页即止）。
+            "has_more": n as u32 >= size,
+        }),
+    ))
 }
 
 fn cmd_info(api: &Api, argv: &[String]) -> Result<Value, AppError> {
@@ -1790,5 +1950,51 @@ mod tests {
         assert_eq!(ctx["Nl"], "8000");
         assert_eq!(ctx["Nh"], "0");
         assert_eq!(s2.finalize_hex(), expect);
+    }
+
+    #[test]
+    fn search_path_stops_at_root() {
+        let (p, done) = build_search_path("0", "README.md", 12, |_| unreachable!());
+        assert!(done);
+        assert_eq!(p, "/README.md");
+    }
+
+    #[test]
+    fn search_path_walks_ancestors() {
+        let chain: HashMap<&str, (&str, &str)> = HashMap::from([
+            ("86fe", ("手机备份", "6f29")),
+            ("6f29", ("01_迁移备份", "0")),
+        ]);
+        let (p, done) = build_search_path("86fe", "RESTORE-README.md", 12, |fid| {
+            chain
+                .get(fid)
+                .map(|(n, d)| ((*n).to_string(), (*d).to_string()))
+        });
+        assert!(done);
+        assert_eq!(p, "/01_迁移备份/手机备份/RESTORE-README.md");
+    }
+
+    #[test]
+    fn search_path_detects_cycle_and_caps_depth() {
+        let (_, done) = build_search_path("a", "x.txt", 12, |fid| {
+            Some((
+                "loop".to_string(),
+                if fid == "a" { "b" } else { "a" }.to_string(),
+            ))
+        });
+        assert!(!done);
+        let (_, done2) = build_search_path("n0", "x.txt", 2, |fid| {
+            let n: usize = fid[1..].parse().unwrap_or(0);
+            Some((format!("d{n}"), format!("n{}", n + 1)))
+        });
+        assert!(!done2);
+    }
+
+    #[test]
+    fn search_arg_num_defaults_clamps_and_rejects_junk() {
+        assert_eq!(arg_num("", 50, 1, 100, "size").unwrap(), 50);
+        assert_eq!(arg_num("999", 50, 1, 100, "size").unwrap(), 100);
+        assert_eq!(arg_num("0", 1, 1, 1000, "page").unwrap(), 1);
+        assert!(arg_num("abc", 1, 1, 1000, "page").is_err());
     }
 }

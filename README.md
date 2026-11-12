@@ -45,8 +45,9 @@ cd .. && ./run.sh                  # 开发时用本机共享 target
 ./run.sh --cli list --help                      # 每个命令的 --help 都由 schema 生成
 ./run.sh --cli share --path=/x --days 7 --passcode       # 生成提取码（passcode 是 flag）
 KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 kuake 子进程
+./run.sh --cli search --q README --json        # 全盘搜索文件名（仅内置原生后端）
 ./run.sh --mcp                                  # 以 MCP server 暴露给 AI
-./run.sh --schema                               # 打印 18 个命令的 JSON Schema
+./run.sh --schema                               # 打印 19 个命令的 JSON Schema
 ./run.sh --cli list --openai-tool               # 顺便白送 OpenAI/Anthropic/Gemini tool 定义
 ```
 
@@ -55,12 +56,40 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 | 页面 | 能力 |
 | --- | --- |
 | 文件 | 目录浏览、面包屑/历史栈、排序（名称/时间/大小）、新建文件夹、上传（可选**上传前加密**）、重命名、移动、复制、删除、详情、下载、**解密到本机**、创建分享 |
+| 搜索 | **全盘按文件名搜索**、命中高亮、完整路径反查、复制路径、跳到所在目录、分页加载（v0.4.0） |
 | 分享 | 我的分享列表（有效期/浏览/转存）、复制链接、浏览器打开、取消分享、转存他人分享 |
 | 账号 | 昵称、会员类型与到期、容量占用进度、网盘后端类型与版本、**扫码登录**（一键刷新凭据） |
 | 活动日志 | 每次调用的实时进度/耗时/错误，可折叠、可清空 |
 
-18 个命令：`list` `info` `user` `version` `download` `share-list` `create` `upload` `move`
+19 个命令：`list` `info` `search` `user` `version` `download` `share-list` `create` `upload` `move`
 `copy` `rename` `delete` `share` `share-delete` `share-save` `encrypt` `decrypt` `login`。
+
+## 全盘搜索（v0.4.0）
+
+![全盘搜索](screenshot-search.png)
+
+「搜索」页按文件名跨整个网盘找文件/目录，命中处高亮，结果直接给**完整路径**：
+
+```bash
+./run.sh --cli search --q README --json
+./run.sh --cli search --q 音乐 --page 2 --size 30 --json-stream
+```
+
+- 官方 `GET /1/clouddrive/file/search` 只回 `fid` 和父 `pdir_fid`，**不回 `path`、也不回 `total`**。
+  客户端沿 `pdir_fid` 用 `/file/info` 逐级反查到根（同一批结果共享祖先，按 fid 缓存），
+  拼回 `/01_迁移备份/…/README.md` 这样的完整路径 —— 于是 `download` / `rename` / `move` /
+  `copy` / `share` / `info` 这些基于路径的命令原样复用，一条都不用改。
+- 分页靠「短页即止」：满页（`has_more=true`）时点「加载更多」，不依赖不存在的 `total`。
+- 空关键词在前后端都被挡掉（夸克对空 `q` 会当"最近文件"返回，容易误当全盘列表）。
+- 高亮 `hl_file_name` 是 `&lt;hl&gt;…&lt;/hl&gt;` 转义文本，前端拆成纯文本片段后用
+  `<mark>` 渲染，**绝不 `dangerouslySetInnerHTML`**。
+- 逐级反查有 12 层上限、成环检测与单次 150 次请求预算；万一某条祖先链断了，
+  该项标 `path_partial: true`、路径留空并在 UI 上禁用「复制路径 / 跳到所在目录」，
+  **不会拿半截路径去跑写操作**，其余结果照常可用。
+
+> 边界：`search` 是本客户端自研扩展，上游 `kuake` CLI 没有这条命令，
+> 因此 `KUAKE_STUDIO_BACKEND=cli` 回退模式下会明确报「仅内置原生后端可用」，
+> 侧栏「搜索」也会禁用；不会伪造一个假的搜索结果。
 
 ## 架构
 
@@ -74,26 +103,27 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
    ▼
 axum 0.8 (127.0.0.1 only, 回环 Host/Origin 校验 + 常量时间令牌)
    ▼
-lilyco Registry (18 个 #[derive(App)] 命令, SafetyTier T0 只读 / T1 需确认)
+lilyco Registry (19 个 #[derive(App)] 命令, SafetyTier T0 只读 / T1 需确认)
    ▼
 内置原生夸克 API（src/quark.rs：reqwest 直连官方 HTTP；cookie 来自 .env）
    └─ 可选 KUAKE_STUDIO_BACKEND=cli → kuake CLI 子进程（argv 数组、可取消、900s 超时）
 ```
 
-关键点：**界面不是手写 18 套表单**。后端 `GET /api/schema` 把 lilyco 每个命令的
+关键点：**界面不是手写 19 套表单**。后端 `GET /api/schema` 把 lilyco 每个命令的
 `CommandSchema`（参数名/类型/枚举/范围/必填/默认值）交给前端，前端用一套
 `SchemaForm` 渲染出对应控件，`CommandDialog` 提交时只发送 schema 声明过的键。
 加命令只需要在 `src/apps.rs` 里加一个 struct。
 
 ## 原生夸克 API 后端（默认）
 
-从 v0.2.0 起，15 条网盘命令全部由 `src/quark.rs` 直接调夸克官方 HTTP 接口实现，
+从 v0.2.0 起，所有网盘命令都由 `src/quark.rs` 直接调夸克官方 HTTP 接口实现，
 **不再 fork 本机 `kuake` 进程**；`encrypt` / `decrypt` 仍是纯本机命令。
-v0.3.0 新增第 18 条 `login`（扫码登录，见下章）。
+v0.3.0 新增第 18 条 `login`（扫码登录，见下章）；v0.4.0 新增第 19 条 `search`
+（全盘搜索，见下章），网盘命令变成 16 条。
 
 - 覆盖：账号 / 列目录 / 详情 / 新建 / 重命名 / 移动 / 复制 / 删除 / 上传 / 下载 /
-  分享（创建、列表、删除、转存）。返回体逐字复刻 kuake CLI 的
-  `{success,code,message,data}` 信封，所以前端、SSE、MCP、`--schema`、18 个命令全都不用改。
+  分享（创建、列表、删除、转存）/ 全盘搜索。返回体逐字复刻 kuake CLI 的
+  `{success,code,message,data}` 信封，所以前端、SSE、MCP、`--schema` 全都复用同一套协议。
 - 登录态用 `KUAKE_COOKIE`（或 `KUAKE_PUS` + `KUAKE_PUUS`），存在
   `~/.config/kuake/.env`；**v0.3.0 起首选「账号 → 扫码登录」自动写入**，无需手抄。
 - 上传实现了 `upload/pre → update/hash（秒传）→ 分片 PUT → CompleteMultipartUpload → finish`：
@@ -307,7 +337,7 @@ cd ~/code/kuake-studio/tools
 
 ```
 src/main.rs       入口：--cli / --mcp / --schema / 默认 Web
-src/apps.rs       18 个 #[derive(App)] 命令（lilyco 派生宏）
+src/apps.rs       19 个 #[derive(App)] 命令（lilyco 派生宏）
 src/crypt.rs      .kcrypt 容器：AES-256-GCM 分块 + PBKDF2-SHA256 派生密钥
 src/quark.rs      自研夸克 API：reqwest 直连官方接口，复刻 CLI 信封（默认后端）
 src/login.rs      夸克扫码登录：cookie jar / QR SVG / service_ticket 换 cookie / 校验昵称 / 备份写 .env

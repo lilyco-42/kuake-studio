@@ -100,6 +100,44 @@ fn run_info(app: &Info, ctx: &Context) -> Result<serde_json::Value, AppError> {
     finish(ctx, t, v)
 }
 
+/// 全盘搜索文件（按文件名，返回完整路径）
+#[derive(Debug, App)]
+#[app(
+    name = "search",
+    about = "全盘搜索文件（按文件名，返回完整路径）",
+    run = "run_search"
+)]
+pub struct Search {
+    #[arg(about = "搜索关键词（必填，不能为空）")]
+    pub q: String,
+    #[arg(about = "页码，从 1 开始", default = 1, min = 1, max = 1000)]
+    pub page: u32,
+    #[arg(
+        about = "每页条数（夸克后端上限 100）",
+        default = 50,
+        min = 1,
+        max = 100
+    )]
+    pub size: u32,
+}
+
+fn run_search(app: &Search, ctx: &Context) -> Result<serde_json::Value, AppError> {
+    let t = start();
+    let q = app.q.trim();
+    if q.is_empty() {
+        return Err(AppError::InvalidInput("搜索关键词不能为空".into()));
+    }
+    let v = kuake::run(
+        ctx,
+        &[
+            "search".to_string(),
+            q.to_string(),
+            app.page.to_string(),
+            app.size.to_string(),
+        ],
+    )?;
+    finish(ctx, t, v)
+}
 /// 下载到本机
 #[derive(Debug, App)]
 #[app(name = "download", about = "下载文件到本机目录", run = "run_download")]
@@ -850,6 +888,7 @@ pub fn commands() -> Vec<lilyco::__core::registry::RegisteredCommand> {
     vec![
         RegisteredCommand::from_app::<ListDir>(),
         RegisteredCommand::from_app::<Info>(),
+        RegisteredCommand::from_app::<Search>(),
         RegisteredCommand::from_app::<UserInfo>(),
         RegisteredCommand::from_app::<Version>(),
         RegisteredCommand::from_app::<Download>(),
@@ -891,6 +930,19 @@ mod tests {
     }
 
     #[test]
+    fn search_schema_requires_q_and_defaults_pagination() {
+        let s = <Search as App>::schema();
+        assert_eq!(s.name, "search");
+        assert_eq!(s.args.len(), 3);
+        assert_eq!(s.args[0].name, "q");
+        assert!(s.args[0].required);
+        assert_eq!(s.args[1].name, "page");
+        assert_eq!(s.args[1].default.as_ref().unwrap(), &serde_json::json!(1));
+        assert_eq!(s.args[2].name, "size");
+        assert_eq!(s.args[2].default.as_ref().unwrap(), &serde_json::json!(50));
+    }
+
+    #[test]
     fn registry_registers_every_command() {
         let mut reg =
             Registry::new().with_policy(std::sync::Arc::new(lilyco::__core::safety::Interactive));
@@ -899,6 +951,7 @@ mod tests {
         }
         assert!(reg.contains("list"));
         assert!(reg.contains("share-delete"));
+        assert!(reg.contains("search"));
         assert_eq!(reg.visible().count(), commands().len());
     }
 }

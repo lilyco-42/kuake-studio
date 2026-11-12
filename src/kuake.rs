@@ -178,6 +178,12 @@ pub fn run(ctx: &Context, argv: &[String]) -> Result<serde_json::Value, AppError
     if argv.is_empty() {
         return Err(AppError::InvalidArg("空命令".into()));
     }
+    // 上游 kuake CLI 没有 search；别把 argv 透传过去让它报一堆看不懂的 usage。
+    if argv[0] == "search" {
+        return Err(AppError::Runtime(
+            "search 仅在内置原生后端可用（本机 kuake CLI 没有这条命令）；去掉 KUAKE_STUDIO_BACKEND=cli 即可".into(),
+        ));
+    }
     let started = Instant::now();
     let bin = kuake_bin();
     let mut child = Command::new(&bin)

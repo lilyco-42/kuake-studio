@@ -46,6 +46,20 @@ export interface KuakeFile {
   updated_at: number;
 }
 
+/** search 命令的命中项：与 list 完全同形，额外带高亮与「路径不可用」标记 */
+export interface SearchHit extends KuakeFile {
+  hl_file_name?: string;
+  path_partial?: boolean;
+}
+
+export interface SearchData {
+  list: SearchHit[];
+  q: string;
+  page: number;
+  size: number;
+  has_more: boolean;
+}
+
 export interface KuakeUser {
   avatarUri?: string;
   member_type?: string;
