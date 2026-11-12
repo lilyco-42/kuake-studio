@@ -4,8 +4,8 @@
 1 ICON "kuake-studio.ico"
 
 1 VERSIONINFO
-FILEVERSION 0,1,0,0
-PRODUCTVERSION 0,1,0,0
+FILEVERSION 0,3,0,0
+PRODUCTVERSION 0,3,0,0
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0x0L
 FILEOS 0x40004L
@@ -18,12 +18,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "lilyco-42"
             VALUE "FileDescription", "kuake-studio - Quark Drive client"
-            VALUE "FileVersion", "0.1.0"
+            VALUE "FileVersion", "0.3.0"
             VALUE "InternalName", "kuake-studio"
             VALUE "LegalCopyright", "MIT OR Apache-2.0"
             VALUE "OriginalFilename", "kuake-studio.exe"
             VALUE "ProductName", "kuake-studio"
-            VALUE "ProductVersion", "0.1.0"
+            VALUE "ProductVersion", "0.3.0"
         END
     END
     BLOCK "VarFileInfo"

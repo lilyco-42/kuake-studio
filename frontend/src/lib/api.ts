@@ -70,6 +70,48 @@ export function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
+export interface LoginStart {
+  sid: string;
+  qr_url: string;
+  qr_data: string;
+}
+
+export interface LoginStatus {
+  state: "waiting" | "success" | "failed" | "cancelled";
+  message?: string | null;
+  data?: {
+    nickname?: string;
+    cookie_len?: number;
+    cookie_names?: string[];
+    env_path?: string;
+  };
+}
+
+/** 开一次扫码登录（受令牌保护）；二维码是 data:image/svg+xml;base64 */
+export async function loginStart(): Promise<LoginStart> {
+  const res = await fetch("/api/login/start", {
+    method: "POST",
+    headers: authHeaders(),
+    body: "{}",
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function loginStatus(sid: string): Promise<LoginStatus> {
+  const res = await fetch(`/api/login/status/${sid}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function loginCancel(sid: string): Promise<void> {
+  await fetch(`/api/login/cancel/${sid}`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: "{}",
+  });
+}
+
 export interface RunHandle {
   /** 事件回调 */
   onEvent: (fn: (e: RunEvent) => void) => void;

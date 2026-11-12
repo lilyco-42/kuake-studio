@@ -64,10 +64,21 @@ export function RunnerProvider({ children }: { children: React.ReactNode }) {
         const b = await boot();
         const s = await fetchSchemas();
         if (!alive) return;
-        setInfo({ name: b.name, version: b.version, kuake: b.kuake, temp: b.temp ?? "" });
+        setInfo({
+          name: b.name,
+          version: b.version,
+          kuake: b.kuake,
+          temp: b.temp ?? "",
+          backend: b.backend ?? "native",
+        });
         setSchemas(s);
         setBooted(true);
-        push("info", `后端就绪 · kuake @ ${b.kuake}`);
+        push(
+          "info",
+          b.backend === "cli"
+            ? `后端就绪 · kuake CLI @ ${b.kuake}`
+            : "后端就绪 · 内置原生夸克 API",
+        );
       } catch (e) {
         if (!alive) return;
         const msg = e instanceof Error ? e.message : String(e);
@@ -102,7 +113,16 @@ export function RunnerProvider({ children }: { children: React.ReactNode }) {
           } else if (e.type === "started" && e.message) {
             push("info", e.message);
           } else if (e.type === "telemetry") {
-            push("info", `${e.key} = ${JSON.stringify(e.value)}`);
+            {
+              // 二维码 SVG / token 等大值只记 key，绝不灌进控制台日志
+              if (e.key.startsWith("qr_")) {
+                push("info", `${e.key} 已更新`);
+              } else {
+                const text = JSON.stringify(e.value);
+                const shown = text.length > 200 ? `${text.slice(0, 200)}…` : text;
+                push("info", `${e.key} = ${shown}`);
+              }
+            }
           } else if (e.type === "error") {
             failure = e.message;
           }

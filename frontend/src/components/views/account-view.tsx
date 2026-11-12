@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Crown, HardDrive, RefreshCw, Terminal, User } from "lucide-react";
+import { Crown, HardDrive, QrCode, RefreshCw, Terminal, User } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoginDialog } from "@/components/login-dialog";
 import { useRunner } from "@/lib/store";
 import { formatBytes, formatTime } from "@/lib/format";
 import type { KuakeUser } from "@/lib/types";
@@ -17,6 +18,7 @@ export function AccountView() {
   const [version, setVersion] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [loginOpen, setLoginOpen] = React.useState(false);
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -52,17 +54,23 @@ export function AccountView() {
             <h2 className="text-sm font-medium">账号</h2>
             <p className="text-[11.5px] text-muted-foreground">容量、会员状态与运行环境</p>
           </div>
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void load()} disabled={loading}>
-            <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
-            刷新
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setLoginOpen(true)}>
+              <QrCode className="size-4" />
+              扫码登录
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void load()} disabled={loading}>
+              <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
+              刷新
+            </Button>
+          </div>
         </div>
 
         {error && (
           <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3">
             <p className="text-xs text-destructive">{error}</p>
             <p className="mt-1 text-[11px] text-muted-foreground">
-              多为 KUAKE_COOKIE 过期。更新环境变量后重启本程序。
+              多为登录态过期。点右上角「扫码登录」即可刷新；或更新 KUAKE_COOKIE 后重启。
             </p>
           </div>
         )}
@@ -123,6 +131,12 @@ export function AccountView() {
             <Row k="客户端版本" v={info ? info.version : "—"} mono />
           </CardContent>
         </Card>
+
+        <LoginDialog
+          open={loginOpen}
+          onOpenChange={setLoginOpen}
+          onSuccess={() => void load()}
+        />
       </div>
     </div>
   );

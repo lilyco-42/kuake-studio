@@ -126,12 +126,12 @@ jobs:
           $ErrorActionPreference = "Stop"
           $exe = ".\target\release\kuake-studio.exe"
 
-          # 1) schema 必须能出 17 条命令（进程能起、Registry 装配正常）
+          # 1) schema 必须能出 18 条命令（进程能起、Registry 装配正常）
           $schema = & $exe --schema
           if ($LASTEXITCODE -ne 0) { throw "---schema 退出码 $LASTEXITCODE" }
           $cmds = ($schema | ConvertFrom-Json).Count
           Write-Host "schema 命令数: $cmds"
-          if ($cmds -lt 17) { throw "schema 命令数异常: $cmds" }
+          if ($cmds -lt 18) { throw "schema 命令数异常: $cmds" }
 
           # 2) 真起一次 Web 服务，确认 dist 找得到、/api/boot 通
           $env:KUAKE_STUDIO_NO_OPEN = "1"
@@ -216,7 +216,7 @@ jobs:
           exe=target/release/kuake-studio
           cmds=$($exe --schema | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
           echo "schema 命令数: $cmds"
-          test "$cmds" -ge 17
+          test "$cmds" -ge 18
 
           KUAKE_STUDIO_NO_OPEN=1 KUAKE_STUDIO_PORT=8791 ./target/release/kuake-studio &
           pid=$!
@@ -272,7 +272,7 @@ jobs:
           exe=target/universal/kuake-studio
           cmds=$($exe --schema | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
           echo "schema 命令数: $cmds"
-          test "$cmds" -ge 17
+          test "$cmds" -ge 18
 
       - name: 打包（macos：通用 tar.gz + .app）
         if: matrix.name == 'macos-universal'
@@ -372,7 +372,7 @@ jobs:
               '- Linux：`kuake-studio-*-linux-x64.tar.gz`（解压后 `./start.sh`）' \
               '- macOS：`kuake-studio-*-macos-universal.tar.gz` 或解压出的 `kuake-studio.app`（未签名，首次打开需右键 → 打开）' \
               '' \
-              '首次运行需要夸克 cookie：设置 `KUAKE_COOKIE`，或写进 `~/.config/kuake/.env`。' \
+              '首次运行在「账号」页点「扫码登录」用夸克 App 扫一下即可；也可设置 `KUAKE_COOKIE` 或写进 `~/.config/kuake/.env`。' \
               '默认走内置原生夸克 API，无需安装 kuake CLI；设 KUAKE_STUDIO_BACKEND=cli 才回退到子进程。'
           } > release-notes.md
           if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then

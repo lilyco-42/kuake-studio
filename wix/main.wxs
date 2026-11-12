@@ -3,7 +3,7 @@
   kuake-studio 的 Windows 安装包（WiX Toolset v3）。
 
   candle 调用时传入：
-    -dVersion=0.1.0      Cargo.toml 里的版本
+    -dVersion=0.3.0      Cargo.toml 里的版本（由 CI 自动传入）
     -dPkgDir=<abs path>  打包暂存目录（里面是 kuake-studio.exe 和 dist/）
     -dIcoPath=<abs path> assets/kuake-studio.ico
 

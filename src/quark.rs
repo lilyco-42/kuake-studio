@@ -905,7 +905,7 @@ pub fn dispatch(ctx: &Context, argv: &[String]) -> Result<Value, AppError> {
         "user" => cmd_user(&api),
         "version" => Ok(ok(
             "kuake-studio 原生夸克 API",
-            json!({ "version": "native 0.1.0" }),
+            json!({ "version": format!("native {}", env!("CARGO_PKG_VERSION")) }),
         )),
         "list" => cmd_list(&api, argv),
         "info" => cmd_info(&api, argv),

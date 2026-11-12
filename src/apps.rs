@@ -787,6 +787,64 @@ fn run_decrypt_local(app: &DecryptLocal, ctx: &Context) -> Result<serde_json::Va
     )
 }
 
+/// 夸克扫码登录（本机写 ~/.config/kuake/.env，不需要 kuake CLI）
+#[derive(Debug, App)]
+#[app(
+    name = "login",
+    about = "用夸克 App 扫码登录，自动刷新并写入本机 .env 凭据",
+    run = "run_login",
+    safety = "t1"
+)]
+pub struct Login {
+    #[arg(about = "等待扫码的秒数（10~900）", default = 300, min = 10, max = 900)]
+    pub timeout: u32,
+}
+
+fn run_login(app: &Login, ctx: &Context) -> Result<serde_json::Value, AppError> {
+    let t = start();
+    let mut session = crate::login::LoginSession::start()?;
+    let svg_path =
+        std::env::temp_dir().join(format!("kuake-studio-login-qr-{}.svg", std::process::id()));
+    std::fs::write(&svg_path, session.qr_svg.as_bytes()).map_err(|e| {
+        AppError::Runtime(format!("无法保存二维码 SVG 到 {}：{e}", svg_path.display()))
+    })?;
+    ctx.log(
+        LogLevel::Info,
+        format!("二维码已保存：{}", svg_path.display()),
+    );
+    ctx.log(
+        LogLevel::Info,
+        "请用夸克 App 扫描这个 SVG；在手机上确认登录后凭据会自动写入本机。",
+    );
+    let meta = session.wait(
+        &|| ctx.is_cancelled(),
+        &|msg| ctx.log(LogLevel::Info, msg),
+        u64::from(app.timeout),
+    )?;
+    let mut data = meta
+        .as_object()
+        .cloned()
+        .unwrap_or_else(serde_json::Map::new);
+    data.insert(
+        "qr_url".into(),
+        serde_json::Value::String(session.qr_url.clone()),
+    );
+    data.insert(
+        "qr_svg_path".into(),
+        serde_json::Value::String(svg_path.to_string_lossy().to_string()),
+    );
+    finish(
+        ctx,
+        t,
+        serde_json::json!({
+            "success": true,
+            "code": "OK",
+            "message": "扫码登录成功",
+            "data": serde_json::Value::Object(data),
+        }),
+    )
+}
+
 /// 全部命令（顺序即 UI 里的呈现顺序）
 pub fn commands() -> Vec<lilyco::__core::registry::RegisteredCommand> {
     vec![
@@ -807,6 +865,7 @@ pub fn commands() -> Vec<lilyco::__core::registry::RegisteredCommand> {
         RegisteredCommand::from_app::<ShareSave>(),
         RegisteredCommand::from_app::<EncryptLocal>(),
         RegisteredCommand::from_app::<DecryptLocal>(),
+        RegisteredCommand::from_app::<Login>(),
     ]
 }
 

@@ -12,6 +12,7 @@
 mod apps;
 mod crypt;
 mod kuake;
+mod login;
 mod paths;
 mod quark;
 mod security;

@@ -22,7 +22,7 @@
 
 三种包都自带 `dist/`（前端产物放在 exe 同级），启动后自动开浏览器到
 `http://127.0.0.1:8787`。**默认不再需要安装 `kuake.exe` / `kuake` CLI**：内置原生后端
-只要 cookie 就能跑；仅当显式设 `KUAKE_STUDIO_BACKEND=cli` 时才需要本机 CLI。
+首次在「账号」页点「**扫码登录**」用夸克 App 扫一下即可，无需手抄 cookie；仅当显式设 `KUAKE_STUDIO_BACKEND=cli` 时才需要本机 CLI。
 
 ### 从源码编译
 
@@ -46,7 +46,7 @@ cd .. && ./run.sh                  # 开发时用本机共享 target
 ./run.sh --cli share --path=/x --days 7 --passcode       # 生成提取码（passcode 是 flag）
 KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 kuake 子进程
 ./run.sh --mcp                                  # 以 MCP server 暴露给 AI
-./run.sh --schema                               # 打印 17 个命令的 JSON Schema
+./run.sh --schema                               # 打印 18 个命令的 JSON Schema
 ./run.sh --cli list --openai-tool               # 顺便白送 OpenAI/Anthropic/Gemini tool 定义
 ```
 
@@ -56,11 +56,11 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 | --- | --- |
 | 文件 | 目录浏览、面包屑/历史栈、排序（名称/时间/大小）、新建文件夹、上传（可选**上传前加密**）、重命名、移动、复制、删除、详情、下载、**解密到本机**、创建分享 |
 | 分享 | 我的分享列表（有效期/浏览/转存）、复制链接、浏览器打开、取消分享、转存他人分享 |
-| 账号 | 昵称、会员类型与到期、容量占用进度、网盘后端类型与版本 |
+| 账号 | 昵称、会员类型与到期、容量占用进度、网盘后端类型与版本、**扫码登录**（一键刷新凭据） |
 | 活动日志 | 每次调用的实时进度/耗时/错误，可折叠、可清空 |
 
-17 个命令：`list` `info` `user` `version` `download` `share-list` `create` `upload` `move`
-`copy` `rename` `delete` `share` `share-delete` `share-save` `encrypt` `decrypt`。
+18 个命令：`list` `info` `user` `version` `download` `share-list` `create` `upload` `move`
+`copy` `rename` `delete` `share` `share-delete` `share-save` `encrypt` `decrypt` `login`。
 
 ## 架构
 
@@ -70,59 +70,79 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
    │  GET /api/schema  读 CommandSchema[] → 表单/对话框全部由 schema 驱动
    │  POST /api/run {cmd,args} → {session_id}
    │  GET /api/progress/{sid}  SSE  ← lilyco-core 的 Progress 事件流
+    │  POST /api/login/start → GET /api/login/status/{sid}  扫码登录
    ▼
 axum 0.8 (127.0.0.1 only, 回环 Host/Origin 校验 + 常量时间令牌)
    ▼
-lilyco Registry (17 个 #[derive(App)] 命令, SafetyTier T0 只读 / T1 需确认)
+lilyco Registry (18 个 #[derive(App)] 命令, SafetyTier T0 只读 / T1 需确认)
    ▼
 内置原生夸克 API（src/quark.rs：reqwest 直连官方 HTTP；cookie 来自 .env）
    └─ 可选 KUAKE_STUDIO_BACKEND=cli → kuake CLI 子进程（argv 数组、可取消、900s 超时）
 ```
 
-关键点：**界面不是手写 17 套表单**。后端 `GET /api/schema` 把 lilyco 每个命令的
+关键点：**界面不是手写 18 套表单**。后端 `GET /api/schema` 把 lilyco 每个命令的
 `CommandSchema`（参数名/类型/枚举/范围/必填/默认值）交给前端，前端用一套
 `SchemaForm` 渲染出对应控件，`CommandDialog` 提交时只发送 schema 声明过的键。
 加命令只需要在 `src/apps.rs` 里加一个 struct。
 
 ## 原生夸克 API 后端（默认）
 
-从 v0.2.0 起，15 条网盘命令全部由 \`src/quark.rs\` 直接调夸克官方 HTTP 接口实现，
-**不再 fork 本机 \`kuake\` 进程**；\`encrypt\` / \`decrypt\` 仍是纯本机命令。
+从 v0.2.0 起，15 条网盘命令全部由 `src/quark.rs` 直接调夸克官方 HTTP 接口实现，
+**不再 fork 本机 `kuake` 进程**；`encrypt` / `decrypt` 仍是纯本机命令。
+v0.3.0 新增第 18 条 `login`（扫码登录，见下章）。
 
 - 覆盖：账号 / 列目录 / 详情 / 新建 / 重命名 / 移动 / 复制 / 删除 / 上传 / 下载 /
   分享（创建、列表、删除、转存）。返回体逐字复刻 kuake CLI 的
-  \`{success,code,message,data}\` 信封，所以前端、SSE、MCP、\`--schema\`、17 个命令全都不用改。
-- 登录态仍用 \`KUAKE_COOKIE\`（或 \`KUAKE_PUS\` + \`KUAKE_PUUS\`），来源照旧是
-  \`~/.config/kuake/.env\`；没有凭据会直接提示运行 \`tools/dump-cookies.mjs --write-env\`。
-- 上传实现了 \`upload/pre → update/hash（秒传）→ 分片 PUT → CompleteMultipartUpload → finish\`：
-  4 MiB 分片、第 2 片起带 \`X-Oss-Hash-Ctx\`（手写 SHA1 中间态，含 \`Nl/Nh\` 高低 32 位拆分）、
-  commit 的 \`Content-MD5\` 与 \`x-oss-callback\` 都按 OSS 签名要求构造。
-- 下载用完整的浏览器 Cookie + \`Chrome/146\` UA 取 OSS 直链，流式落盘、可取消、同名自动加 \` (1)\`；
-  这一步顺带避开了旧 kuake CLI 长期存在的 \`403 auth expired\`（它的请求构造问题，不是 cookie 缺项）。
-- 删除 / 移动 / 复制 / 分享是异步任务：拿到 \`task_id\` 后轮询到 \`status==2\` 才返回成功，
-  避免 UI 刚点完还看到旧文件。转存自己的分享会被夸克以 \`41017\` 拒绝，客户端翻成人话提示。
-- 想对照旧行为或临时排障：\`KUAKE_STUDIO_BACKEND=cli ./run.sh\`；
-  \`/api/boot\` 里的 \`backend\` 字段会标明当前是 \`native\` 还是 \`cli\`，账号页也直接显示。
+  `{success,code,message,data}` 信封，所以前端、SSE、MCP、`--schema`、18 个命令全都不用改。
+- 登录态用 `KUAKE_COOKIE`（或 `KUAKE_PUS` + `KUAKE_PUUS`），存在
+  `~/.config/kuake/.env`；**v0.3.0 起首选「账号 → 扫码登录」自动写入**，无需手抄。
+- 上传实现了 `upload/pre → update/hash（秒传）→ 分片 PUT → CompleteMultipartUpload → finish`：
+  4 MiB 分片、第 2 片起带 `X-Oss-Hash-Ctx`（手写 SHA1 中间态，含 `Nl/Nh` 高低 32 位拆分）、
+  commit 的 `Content-MD5` 与 `x-oss-callback` 都按 OSS 签名要求构造。
+- 下载用完整的浏览器 Cookie + `Chrome/146` UA 取 OSS 直链，流式落盘、可取消、同名自动加 ` (1)`；
+  这一步顺带避开了旧 kuake CLI 长期存在的 `403 auth expired`（它的请求构造问题，不是 cookie 缺项）。
+- 删除 / 移动 / 复制 / 分享是异步任务：拿到 `task_id` 后轮询到 `status==2` 才返回成功，
+  避免 UI 刚点完还看到旧文件。转存自己的分享会被夸克以 `41017` 拒绝，客户端翻成人话提示。
+- 想对照旧行为或临时排障：`KUAKE_STUDIO_BACKEND=cli ./run.sh`；
+  `/api/boot` 里的 `backend` 字段会标明当前是 `native` 还是 `cli`，账号页也直接显示。
 
-> 动机：Windows 发布包本来不含 \`kuake.exe\`（上游只发源码、AGPL），Android 也跑不了 Linux ELF
+> 动机：Windows 发布包本来不含 `kuake.exe`（上游只发源码、AGPL），Android 也跑不了 Linux ELF
 > 子进程；原生后端把这条外部依赖彻底去掉，同时避开上游 CLI 的若干 bug。实现只对照公开接口
 > 实测与 AGPL 源码的**语义**，没有复制其代码。
 
 ## 安全
 
 - 只绑 `127.0.0.1`；`Host` 非回环直接 403。
-- `POST /api/run` `/api/upload` `/api/cancel` 必须带本次启动随机生成的
-  `X-Kuake-Token`（常量时间比对）+ 回环 `Origin`，失败 401。
+- `POST /api/run` `/api/upload` `/api/cancel` **以及 `/api/login/*`** 必须带本次启动随机生成的
+  `X-Kuake-Token`（常量时间比对）+ 回环 `Origin`，失败 401；登录状态接口只回昵称 / cookie 名等元数据，
+  **绝不回 cookie 本身**（避免 SSE / CLI stdout 泄漏凭据）。
   `GET /api/boot` 故意不返回 CORS 头，别的站点读不到令牌。
 - 静态资源带 CSP：`default-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'`。
 - 上传暂存文件落在 `$TMPDIR/kuake-studio-uploads/`，文件名做净化（去路径、限长、过滤 `..`）。
 
-## 凭据：cookie 会过期，一键刷新
+## 登录：扫码（v0.3.0 起推荐）
 
-夸克网盘的所有操作都靠 `KUAKE_COOKIE`。它存在 **`~/.config/kuake/.env`**，是唯一的真相来源
-（`run.sh` 启动时会 source 它，客户端的 `load_env_fallback()` 也以它为准）。
+夸克网盘的所有操作都靠 `KUAKE_COOKIE`，存在 **`~/.config/kuake/.env`**（唯一真相来源）。
+不用再去 F12 手抄、也不用装 Chrome 解密脚本：
 
-过期了（下载报 `403 auth expired`）不用去 F12 手抄，直接：
+1. 打开客户端 →「账号」→ 右上「**扫码登录**」。
+2. 用**夸克 App** 扫对话框里的二维码并确认。
+3. 客户端拿到 `service_ticket` 换 cookie，先调 `/account/info` 校验昵称，才备份原文件为
+   `.env.bak-<epoch>`、写回 `KUAKE_COOKIE='...'`，并 `set_var` 让当前进程立刻生效。
+4. 对话框只显示昵称 / cookie 长度 / cookie 名 / 目标路径，**cookie 本身不进返回体、不进日志**。
+
+CLI / MCP 也能跑第 18 条命令 `login`（默认等 300 秒，可 `--timeout 10..900`）：它会把二维码 SVG
+写到临时目录并打印路径与扫码 URL。Web 端是 `POST /api/login/start` → 轮询 `GET /api/login/status/{sid}`
+→ 可 `POST /api/login/cancel/{sid}` 取消；POST 全在回环令牌闸后面。
+
+> 边界：**扫码确认那一步必须有真人用夸克 App 操作**。本机自动化已验证取 token、二维码内容可解码、
+> 等待态 / 取消 / 超时、以及「拿到 cookie 后强校验昵称」；未做真人扫码端到端。
+
+![夸克扫码登录对话框](screenshot-login-qr.png)
+
+### 兜底：从本机 Chrome 导出（旧办法，仍保留）
+
+若环境里没有夸克 App，或想继续用浏览器登录态：
 
 ```bash
 cd ~/code/kuake-studio/tools
@@ -136,7 +156,7 @@ cd ~/code/kuake-studio/tools
 `--domain quark.cn`、`--profile ~/.config/google-chrome/Default`。
 
 > 坑：写进 .env 的 `KUAKE_COOKIE` 值**必须用单引号包裹**——cookie 里有空格和分号，
-> 裸写会被 `source` 拆成多条命令。脚本已经处理，手改时别丢引号。
+> 裸写会被 `source` 拆成多条命令。脚本与扫码登录都已处理，手改时别丢引号。
 
 ## 上传前加密（.kcrypt）
 
@@ -176,7 +196,8 @@ cd ~/code/kuake-studio/tools
 
 ### 默认原生后端
 
-1. 仍需新鲜的夸克 cookie；过期后所有接口都会失败，跑一次 `dump-cookies.mjs --write-env` 即可。
+1. 仍需新鲜的夸克 cookie；过期后在「账号 → 扫码登录」刷一下（或跑 `dump-cookies.mjs --write-env`）。
+   **真人用夸克 App 扫码那一步无法由自动化脚本代替**，本机只验到二维码/等待/取消/凭据校验。
 2. `share` 对违规文件仍可能被夸克判为「没有可分享的文件」；客户端会回查分享列表确认
    到底建没建成，没建成则提示改分享上级目录。夸克分享目录时会静默跳过其中的违规文件。
 3. `share-days` 只有 **0 / 1 / 7 / 30**（夸克服务端限制），已做成下拉框。
@@ -226,7 +247,7 @@ cd ~/code/kuake-studio/tools
 
 | 项目 | 结果 |
 | --- | --- |
-| 便携包 `.zip` | `--schema` 返回 17 条命令；起在 8791 后 `/api/boot`、`/`、`dist` 静态资源、`/api/schema` 全 200 |
+| 便携包 `.zip` | `--schema` 返回 17 条命令（v0.1.0 历史记录）；起在 8791 后 `/api/boot`、`/`、`dist` 静态资源、`/api/schema` 全 200 |
 | 回环安全闸 | 无令牌 POST → 401；伪造 Origin → 403；未知命令 / 缺必填 → 400 |
 | CLI 的 Windows 分支 | `encrypt` / `decrypt` 2.5 MB 随机文件（3 块）往返，`cmp` 与原文一致；`--help` 正常 |
 | SSE 进度 | `POST /api/run` → `GET /api/progress/{sid}` 收到 3 个 tick + done，日志含 KDF 轮数 |
@@ -258,18 +279,19 @@ cd ~/code/kuake-studio/tools
 | 项目 | 结果 |
 | --- | --- |
 | 启动 | `/api/boot` → `backend: "native"`、`version: "0.2.0"`；`/` 200 且含 `<div id="root">` |
-| 只读命令 | `user` → lilyco42 / SUPER_VIP / 26.0 TB；`version` → `native 0.1.0`；`list /` → 10 项；`info README` → 958 B |
+| 只读命令 | `user` → lilyco42 / SUPER_VIP / 26.0 TB；`version` → `native 0.1.0`（当时硬编码，v0.3.0 已修）；`list /` → 10 项；`info README` → 958 B |
 | 真实网盘闭环 | `create` → `upload`（300043 B）→ `download` → `cmp` 与原文**逐字节一致** → `delete` 清理；残留 0 |
 | 关键结论 | 上游 CLI 的 `403 auth expired`、`program not found` 都不再出现；Windows 包开箱即用 |
 ## 目录
 
 ```
 src/main.rs       入口：--cli / --mcp / --schema / 默认 Web
-src/apps.rs       17 个 #[derive(App)] 命令（lilyco 派生宏）
+src/apps.rs       18 个 #[derive(App)] 命令（lilyco 派生宏）
 src/crypt.rs      .kcrypt 容器：AES-256-GCM 分块 + PBKDF2-SHA256 派生密钥
 src/quark.rs      自研夸克 API：reqwest 直连官方接口，复刻 CLI 信封（默认后端）
+src/login.rs      夸克扫码登录：cookie jar / QR SVG / service_ticket 换 cookie / 校验昵称 / 备份写 .env
 src/kuake.rs      kuake CLI 回退后端 + 单点拦截（脏行解析、取消、超时、进度）
-src/server.rs     axum 宿主：boot/schema/run/progress/cancel/upload + 静态托管
+src/server.rs     axum 宿主：boot/schema/run/progress/cancel/upload/login + 静态托管
 src/security.rs   回环闸 + 令牌
 src/paths.rs      HOME / USERPROFILE 与 ~ 展开（Windows 兼容）
 build.rs          Windows 目标嵌 exe 图标与版本信息
@@ -277,6 +299,6 @@ wix/main.wxs      WiX v3 安装包源（文件清单由 heat 生成）
 .github/workflows/build.yml   三平台 CI / 出包 / 发 Release
 tools/dump-cookies.mjs  从本机 Chrome cookie 库解出夸克 cookie 并刷新 ~/.config/kuake/.env
 frontend/src/components/ui/   shadcn/ui 组件（基于 radix-ui 聚合包手写）
-frontend/src/components/      schema-form / command-dialog / 文件表格 / 控制台
+frontend/src/components/      schema-form / command-dialog / login-dialog / 文件表格 / 控制台
 frontend/src/lib/             api / store / types / format
 ```

@@ -22,7 +22,15 @@ use tokio::sync::{mpsc, Mutex};
 
 use lilyco::__core::executor;
 use lilyco::__core::registry::{Handler, Registry};
-use lilyco::__core::{CommandSchema, Progress};
+use lilyco::__core::{AppError, CommandSchema, Progress};
+
+/// 一次扫码登录会话的状态（后台 std::thread 与 Web 请求共享）。
+pub struct LoginHandle {
+    pub state: String,
+    pub message: Option<String>,
+    pub data: Option<serde_json::Value>,
+    pub cancel: Arc<std::sync::atomic::AtomicBool>,
+}
 
 pub struct AppState {
     /// 多命令注册表（每条 kuake 命令一个 App）
@@ -37,6 +45,8 @@ pub struct AppState {
     pub token: String,
     /// 前端构建产物目录（dist）
     pub dist: std::path::PathBuf,
+    /// 扫码登录会话 → 状态/取消句柄。后台是阻塞 std::thread，所以用 std::sync::Mutex。
+    pub logins: std::sync::Mutex<HashMap<String, LoginHandle>>,
 }
 
 fn generate_id() -> String {
@@ -259,6 +269,129 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+// ── 扫码登录：后台阻塞线程轮询，前端轮询状态 ───────────────
+
+async fn api_login_start(State(state): State<Arc<AppState>>) -> Response {
+    // LoginSession::start 会真实访问 uop.quark.cn，绝不能占着 tokio worker。
+    let started = tokio::task::spawn_blocking(|| {
+        crate::login::LoginSession::start().map_err(|e| e.to_string())
+    })
+    .await;
+    let session = match started {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            return (StatusCode::BAD_GATEWAY, format!("获取二维码失败：{e}")).into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("登录线程异常：{e}"),
+            )
+                .into_response()
+        }
+    };
+
+    let sid = generate_id();
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut map = state.logins.lock().unwrap_or_else(|e| e.into_inner());
+        // 最多保留 8 个未完成会话；旧会话一律取消，避免恶意页面刷爆内存
+        map.retain(|_, h| h.state == "waiting");
+        if map.len() >= 8 {
+            for h in map.values() {
+                h.cancel.store(true, Ordering::Relaxed);
+            }
+            map.clear();
+        }
+        map.insert(
+            sid.clone(),
+            LoginHandle {
+                state: "waiting".into(),
+                message: Some("等待夸克 App 扫码…".into()),
+                data: None,
+                cancel: Arc::clone(&cancel),
+            },
+        );
+    }
+    let qr_url = session.qr_url.clone();
+    let qr_data = session.qr_data.clone();
+
+    let state2 = Arc::clone(&state);
+    let sid2 = sid.clone();
+    let cancel2 = Arc::clone(&cancel);
+    std::thread::spawn(move || {
+        let mut session = session;
+        let result = session.wait(
+            &|| cancel2.load(Ordering::Relaxed),
+            &|msg| {
+                let mut map = state2.logins.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(h) = map.get_mut(&sid2) {
+                    h.message = Some(msg.to_string());
+                }
+            },
+            300,
+        );
+        let mut map = state2.logins.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(h) = map.get_mut(&sid2) {
+            match result {
+                Ok(data) => {
+                    h.state = "success".into();
+                    h.message = None;
+                    h.data = Some(data);
+                }
+                Err(AppError::Cancelled) => {
+                    h.state = "cancelled".into();
+                    h.message = None;
+                }
+                Err(e) => {
+                    h.state = "failed".into();
+                    h.message = Some(e.to_string());
+                }
+            }
+        }
+    });
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "sid": sid,
+            "qr_url": qr_url,
+            "qr_data": qr_data,
+        })),
+    )
+        .into_response()
+}
+
+async fn api_login_status(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let snapshot = {
+        let map = state.logins.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(&id)
+            .map(|h| (h.state.clone(), h.message.clone(), h.data.clone()))
+    };
+    let Some((state, message, data)) = snapshot else {
+        return (StatusCode::NOT_FOUND, "登录会话不存在或已结束").into_response();
+    };
+    let mut body = serde_json::json!({ "state": state, "message": message });
+    if let Some(d) = data {
+        body["data"] = d;
+    }
+    Json(body).into_response()
+}
+
+async fn api_login_cancel(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let found = {
+        let map = state.logins.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(&id).map(|h| Arc::clone(&h.cancel))
+    };
+    match found {
+        Some(flag) => {
+            flag.store(true, Ordering::Relaxed);
+            Json(serde_json::json!({ "ok": true })).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "登录会话不存在或已结束").into_response(),
+    }
+}
+
 // ── 元信息 ─────────────────────────────────────────────────
 
 /// 启动握手：前端从这里拿令牌。
@@ -416,6 +549,7 @@ pub fn build_state(registry: Registry, token: String, dist: std::path::PathBuf) 
         cancels: Mutex::new(HashMap::new()),
         token,
         dist,
+        logins: std::sync::Mutex::new(HashMap::new()),
     })
 }
 
@@ -427,6 +561,9 @@ pub async fn serve(state: Arc<AppState>, port: u16) -> std::io::Result<()> {
         .route("/api/progress/{sid}", get(api_progress))
         .route("/api/cancel/{sid}", post(api_cancel))
         .route("/api/upload", post(api_upload))
+        .route("/api/login/start", post(api_login_start))
+        .route("/api/login/status/{sid}", get(api_login_status))
+        .route("/api/login/cancel/{sid}", post(api_login_cancel))
         .fallback(static_handler)
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
@@ -456,6 +593,13 @@ mod tests {
     fn filename_is_sanitized() {
         assert_eq!(sanitize_filename("../../etc/passwd"), "____etc_passwd");
         assert!(sanitize_filename("").is_empty());
+    }
+
+    #[test]
+    fn login_state_starts_clean() {
+        let reg = Registry::new();
+        let state = build_state(reg, "t".into(), std::path::PathBuf::from("dist"));
+        assert!(state.logins.lock().unwrap().is_empty());
     }
 
     #[test]

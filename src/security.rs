@@ -17,6 +17,8 @@ use crate::server::AppState;
 pub const TOKEN_HEADER: &str = "X-Kuake-Token";
 
 const PROTECTED_POST: &[&str] = &["/api/run", "/api/upload", "/api/cancel"];
+/// 扫码登录会改本机凭据，POST 必须同样带令牌 + 回环 Origin。
+const PROTECTED_PREFIXES: &[&str] = &["/api/login/"];
 
 pub fn is_loopback_host(host: &str) -> bool {
     let host = host.trim().to_ascii_lowercase();
@@ -65,7 +67,9 @@ pub async fn guard(State(state): State<Arc<AppState>>, request: Request, next: N
 
     let path = request.uri().path().to_string();
     let protected = request.method() == Method::POST
-        && (PROTECTED_POST.contains(&path.as_str()) || path.starts_with("/api/cancel/"));
+        && (PROTECTED_POST.contains(&path.as_str())
+            || path.starts_with("/api/cancel/")
+            || PROTECTED_PREFIXES.iter().any(|p| path.starts_with(p)));
     if protected {
         if let Some(origin) = header_str(headers, "origin") {
             let ok = origin_host(origin).map(is_loopback_host).unwrap_or(false);
@@ -92,6 +96,13 @@ mod tests {
         assert!(is_loopback_host("localhost:5180"));
         assert!(is_loopback_host("[::1]:8787"));
         assert!(!is_loopback_host("evil.example.com"));
+    }
+
+    #[test]
+    fn login_post_is_protected() {
+        assert!("/api/login/start".starts_with(PROTECTED_PREFIXES[0]));
+        assert!("/api/login/cancel/abc".starts_with(PROTECTED_PREFIXES[0]));
+        assert!(!"/api/loginish/start".starts_with(PROTECTED_PREFIXES[0]));
     }
 
     #[test]
