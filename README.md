@@ -2,7 +2,8 @@
 
 夸克网盘桌面客户端。**Rust 后端用 [lilyco](https://github.com/lilyco-42/lilyco) 框架**（一个 `App`/`Registry`
 派生同时驱动 CLI / Web / MCP 三端），**前端用 shadcn/ui**（radix-ui + Tailwind 4 + cva + lucide + sonner），
-所有网盘操作最终落到本机的 `kuake` CLI。
+网盘操作默认走**内置自研夸克 API**（`src/quark.rs`，reqwest 直连官方 HTTP 接口）；
+设 `KUAKE_STUDIO_BACKEND=cli` 才回退到本机 `kuake` CLI 子进程。
 
 ![文件](screenshot-files.png)
 
@@ -20,7 +21,8 @@
 | macOS | `*-macos-universal.tar.gz` | 解压后双击 `kuake-studio.app`（未签名，首次打开需右键 → 打开），或 `./kuake-studio` |
 
 三种包都自带 `dist/`（前端产物放在 exe 同级），启动后自动开浏览器到
-`http://127.0.0.1:8787`。**`kuake` 命令行本体需自行安装**，客户端只是调用它。
+`http://127.0.0.1:8787`。**默认不再需要安装 `kuake.exe` / `kuake` CLI**：内置原生后端
+只要 cookie 就能跑；仅当显式设 `KUAKE_STUDIO_BACKEND=cli` 时才需要本机 CLI。
 
 ### 从源码编译
 
@@ -41,7 +43,8 @@ cd .. && ./run.sh                  # 开发时用本机共享 target
 ./run.sh --cli list --path / --json-stream      # 事件流
 ./run.sh --cli upload --file ~/a.zip --dest /03_项目与资料/a.zip
 ./run.sh --cli list --help                      # 每个命令的 --help 都由 schema 生成
-./run.sh --cli share --path=/x --days 7 --passcode false
+./run.sh --cli share --path=/x --days 7 --passcode       # 生成提取码（passcode 是 flag）
+KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 kuake 子进程
 ./run.sh --mcp                                  # 以 MCP server 暴露给 AI
 ./run.sh --schema                               # 打印 17 个命令的 JSON Schema
 ./run.sh --cli list --openai-tool               # 顺便白送 OpenAI/Anthropic/Gemini tool 定义
@@ -53,7 +56,7 @@ cd .. && ./run.sh                  # 开发时用本机共享 target
 | --- | --- |
 | 文件 | 目录浏览、面包屑/历史栈、排序（名称/时间/大小）、新建文件夹、上传（可选**上传前加密**）、重命名、移动、复制、删除、详情、下载、**解密到本机**、创建分享 |
 | 分享 | 我的分享列表（有效期/浏览/转存）、复制链接、浏览器打开、取消分享、转存他人分享 |
-| 账号 | 昵称、会员类型与到期、容量占用进度、kuake CLI 版本与路径 |
+| 账号 | 昵称、会员类型与到期、容量占用进度、网盘后端类型与版本 |
 | 活动日志 | 每次调用的实时进度/耗时/错误，可折叠、可清空 |
 
 17 个命令：`list` `info` `user` `version` `download` `share-list` `create` `upload` `move`
@@ -72,13 +75,38 @@ axum 0.8 (127.0.0.1 only, 回环 Host/Origin 校验 + 常量时间令牌)
    ▼
 lilyco Registry (17 个 #[derive(App)] 命令, SafetyTier T0 只读 / T1 需确认)
    ▼
-kuake CLI 子进程（argv 数组，绝不经过 shell；可取消、900s 超时）
+内置原生夸克 API（src/quark.rs：reqwest 直连官方 HTTP；cookie 来自 .env）
+   └─ 可选 KUAKE_STUDIO_BACKEND=cli → kuake CLI 子进程（argv 数组、可取消、900s 超时）
 ```
 
 关键点：**界面不是手写 17 套表单**。后端 `GET /api/schema` 把 lilyco 每个命令的
 `CommandSchema`（参数名/类型/枚举/范围/必填/默认值）交给前端，前端用一套
 `SchemaForm` 渲染出对应控件，`CommandDialog` 提交时只发送 schema 声明过的键。
 加命令只需要在 `src/apps.rs` 里加一个 struct。
+
+## 原生夸克 API 后端（默认）
+
+从 v0.2.0 起，15 条网盘命令全部由 \`src/quark.rs\` 直接调夸克官方 HTTP 接口实现，
+**不再 fork 本机 \`kuake\` 进程**；\`encrypt\` / \`decrypt\` 仍是纯本机命令。
+
+- 覆盖：账号 / 列目录 / 详情 / 新建 / 重命名 / 移动 / 复制 / 删除 / 上传 / 下载 /
+  分享（创建、列表、删除、转存）。返回体逐字复刻 kuake CLI 的
+  \`{success,code,message,data}\` 信封，所以前端、SSE、MCP、\`--schema\`、17 个命令全都不用改。
+- 登录态仍用 \`KUAKE_COOKIE\`（或 \`KUAKE_PUS\` + \`KUAKE_PUUS\`），来源照旧是
+  \`~/.config/kuake/.env\`；没有凭据会直接提示运行 \`tools/dump-cookies.mjs --write-env\`。
+- 上传实现了 \`upload/pre → update/hash（秒传）→ 分片 PUT → CompleteMultipartUpload → finish\`：
+  4 MiB 分片、第 2 片起带 \`X-Oss-Hash-Ctx\`（手写 SHA1 中间态，含 \`Nl/Nh\` 高低 32 位拆分）、
+  commit 的 \`Content-MD5\` 与 \`x-oss-callback\` 都按 OSS 签名要求构造。
+- 下载用完整的浏览器 Cookie + \`Chrome/146\` UA 取 OSS 直链，流式落盘、可取消、同名自动加 \` (1)\`；
+  这一步顺带避开了旧 kuake CLI 长期存在的 \`403 auth expired\`（它的请求构造问题，不是 cookie 缺项）。
+- 删除 / 移动 / 复制 / 分享是异步任务：拿到 \`task_id\` 后轮询到 \`status==2\` 才返回成功，
+  避免 UI 刚点完还看到旧文件。转存自己的分享会被夸克以 \`41017\` 拒绝，客户端翻成人话提示。
+- 想对照旧行为或临时排障：\`KUAKE_STUDIO_BACKEND=cli ./run.sh\`；
+  \`/api/boot\` 里的 \`backend\` 字段会标明当前是 \`native\` 还是 \`cli\`，账号页也直接显示。
+
+> 动机：Windows 发布包本来不含 \`kuake.exe\`（上游只发源码、AGPL），Android 也跑不了 Linux ELF
+> 子进程；原生后端把这条外部依赖彻底去掉，同时避开上游 CLI 的若干 bug。实现只对照公开接口
+> 实测与 AGPL 源码的**语义**，没有复制其代码。
 
 ## 安全
 
@@ -144,7 +172,20 @@ cd ~/code/kuake-studio/tools
 
 > 注意：`.kcrypt` 是**本客户端自有格式**，不是标准 age/gpg 容器；只保证本客户端能解开。
 
-## 已知限制（来自 kuake CLI 本身）
+## 已知限制
+
+### 默认原生后端
+
+1. 仍需新鲜的夸克 cookie；过期后所有接口都会失败，跑一次 `dump-cookies.mjs --write-env` 即可。
+2. `share` 对违规文件仍可能被夸克判为「没有可分享的文件」；客户端会回查分享列表确认
+   到底建没建成，没建成则提示改分享上级目录。夸克分享目录时会静默跳过其中的违规文件。
+3. `share-days` 只有 **0 / 1 / 7 / 30**（夸克服务端限制），已做成下拉框。
+4. `share-list` 的 `size` 上限 **100**；`share-delete` 只认 `share_id`，不认 `pwd_id`。
+5. 不能转存**自己**创建的分享（夸克账号级限制 `41017`），需换另一个账号的链接。
+6. `download` 的 dest 被规整成**目录**（不存在自动建，支持 `~`）；`upload` 的 dest 必须是
+   **完整文件路径**，同名已存在返回 `SKIPPED`，客户端转成明确错误，不会静默覆盖。
+
+### 回退到 kuake CLI（`KUAKE_STUDIO_BACKEND=cli`）
 
 1. **`download` 的 dest 语义是二义的**（原材料行为）：dest 指向**已存在的目录** → 文件放进去；
    指向**不存在的路径** → 直接被当成完整文件名写出去，于是 `dest=/tmp/dl` 会得到一个叫 `dl`
@@ -160,6 +201,8 @@ cd ~/code/kuake-studio/tools
    `share_id` 恢复出来；没建成则报人话错误，提示「该文件可能违规，试试分享它所在的目录」。
    夸克本身也支持分享**目录**——目录里的违规文件会被静默跳过。
 7. `share` 的 `days` 只接受 **0 / 1 / 7 / 30**，客户端已做成下拉框（永久/1 天/7 天/30 天）。
+8. 旧版 `download` 曾长期报 `403 auth expired`（上游请求构造问题）；原生后端已规避，
+   CLI 回退时可用新 cookie 缓解。
 
 ## 各平台构建（GitHub Actions）
 
@@ -178,7 +221,8 @@ cd ~/code/kuake-studio/tools
 
 ## 实测记录：Windows 包在 Wine 里跑过
 
-发布后用 **Wine 11.21**（win64 prefix）真跑了 `v0.1.0` 的 Windows 产物，不只是交叉编译检查：
+发布后用 **Wine 11.21**（win64 prefix）真跑了 `v0.1.0` 的 Windows 产物，不只是交叉编译检查。
+> 注意：下面是**切换原生后端之前**的历史记录；从 v0.2.0 起 Windows 包不再需要 `kuake.exe`。
 
 | 项目 | 结果 |
 | --- | --- |
@@ -200,9 +244,9 @@ cd ~/code/kuake-studio/tools
 三个边界：
 
 1. 这是 **Wine 11.21**，不是真 Windows 机器；真机上的 MSI 升级路径未验。
-2. Windows 包**不含 `kuake.exe`**（上游只发源码，本项目不重分发）。实测用上面那条 Go 命令
-   编译出 exe 后由 `KUAKE_BIN` 指过去；否则每个网盘命令都会报
-   `无法启动 kuake（kuake）：program not found`。
+2. `v0.1.0` 的 Windows 包**不含 `kuake.exe`**（上游只发源码，本项目不重分发）。当时实测用
+   上面那条 Go 命令编译出 exe 后由 `KUAKE_BIN` 指过去，否则每个网盘命令都会报
+   `无法启动 kuake（kuake）：program not found`。**原生后端已不再有此限制**。
 3. 静默卸载时若 `kuake-studio.exe` 仍在运行，Windows/Wine 会跳过删除该 exe 并留下空壳目录：
    先退出客户端（或任务管理器结束进程）再卸载即可。干净复测已证明 WiX 包本身卸载干净。
 ## 目录
@@ -211,7 +255,8 @@ cd ~/code/kuake-studio/tools
 src/main.rs       入口：--cli / --mcp / --schema / 默认 Web
 src/apps.rs       17 个 #[derive(App)] 命令（lilyco 派生宏）
 src/crypt.rs      .kcrypt 容器：AES-256-GCM 分块 + PBKDF2-SHA256 派生密钥
-src/kuake.rs      kuake 子进程适配（脏行解析、取消、超时、进度）
+src/quark.rs      自研夸克 API：reqwest 直连官方接口，复刻 CLI 信封（默认后端）
+src/kuake.rs      kuake CLI 回退后端 + 单点拦截（脏行解析、取消、超时、进度）
 src/server.rs     axum 宿主：boot/schema/run/progress/cancel/upload + 静态托管
 src/security.rs   回环闸 + 令牌
 src/paths.rs      HOME / USERPROFILE 与 ~ 展开（Windows 兼容）

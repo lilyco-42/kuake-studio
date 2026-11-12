@@ -270,6 +270,8 @@ async fn api_boot(State(state): State<Arc<AppState>>) -> Response {
         "name": "kuake-studio",
         "version": env!("CARGO_PKG_VERSION"),
         "kuake": crate::kuake::kuake_bin(),
+        // 默认内置的原生夸克 API；设 KUAKE_STUDIO_BACKEND=cli 才回退到子进程。
+        "backend": if std::env::var("KUAKE_STUDIO_BACKEND").as_deref() == Ok("cli") { "cli" } else { "native" },
         // 临时目录也交给后端决定：前端原来硬编码 /tmp，在 Windows 上会落到盘符根。
         "temp": std::env::temp_dir().to_string_lossy(),
     }))

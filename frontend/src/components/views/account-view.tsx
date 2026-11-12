@@ -110,10 +110,16 @@ export function AccountView() {
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 text-xs">
-            <Row k="kuake CLI" v={version ?? (loading ? "读取中…" : "—")} />
+            <Row k="网盘后端" v={info?.backend === "cli" ? "kuake CLI 子进程" : "内置原生 API（无需 kuake.exe）"} />
             <Separator />
-            <Row k="kuake 路径" v={info?.kuake ?? "—"} mono />
+            <Row k="后端版本" v={version ?? (loading ? "读取中…" : "—")} />
             <Separator />
+            {info?.backend === "cli" && (
+              <>
+                <Row k="kuake 路径" v={info?.kuake ?? "—"} mono />
+                <Separator />
+              </>
+            )}
             <Row k="客户端版本" v={info ? info.version : "—"} mono />
           </CardContent>
         </Card>

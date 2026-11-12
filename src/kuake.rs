@@ -170,6 +170,11 @@ fn envelope(v: serde_json::Value, stderr: &str) -> Result<serde_json::Value, App
 
 /// 运行一条 kuake 命令并返回其 JSON 信封
 pub fn run(ctx: &Context, argv: &[String]) -> Result<serde_json::Value, AppError> {
+    // 默认走自研原生夸克 API（src/quark.rs），不再依赖本机 kuake CLI 子进程。
+    // 设 KUAKE_STUDIO_BACKEND=cli 可回退到下面的子进程实现。
+    if std::env::var("KUAKE_STUDIO_BACKEND").as_deref() != Ok("cli") {
+        return crate::quark::dispatch(ctx, argv);
+    }
     if argv.is_empty() {
         return Err(AppError::InvalidArg("空命令".into()));
     }

@@ -13,6 +13,7 @@ mod apps;
 mod crypt;
 mod kuake;
 mod paths;
+mod quark;
 mod security;
 mod server;
 

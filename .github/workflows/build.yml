@@ -373,7 +373,7 @@ jobs:
               '- macOS：`kuake-studio-*-macos-universal.tar.gz` 或解压出的 `kuake-studio.app`（未签名，首次打开需右键 → 打开）' \
               '' \
               '首次运行需要夸克 cookie：设置 `KUAKE_COOKIE`，或写进 `~/.config/kuake/.env`。' \
-              '`kuake` 命令行本体需自行安装（客户端会调用它）。'
+              '默认走内置原生夸克 API，无需安装 kuake CLI；设 KUAKE_STUDIO_BACKEND=cli 才回退到子进程。'
           } > release-notes.md
           if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* -R "$REPO" --clobber

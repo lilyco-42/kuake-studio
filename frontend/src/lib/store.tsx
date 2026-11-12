@@ -17,6 +17,8 @@ interface BootInfo {
   kuake: string;
   /** 后端认定的临时目录（Windows 上是 %TEMP%，不是 /tmp） */
   temp: string;
+  /** "native" = 内置自研夸克 API；"cli" = 回退到本机 kuake 子进程 */
+  backend?: "native" | "cli";
 }
 
 interface RunnerCtx {

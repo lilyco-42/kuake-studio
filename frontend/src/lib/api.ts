@@ -3,7 +3,7 @@ import type { CommandSchema, KuakeEnvelope, RunEvent } from "@/lib/types";
 let token = "";
 
 /** 启动握手：令牌只在回环 + 同源下拿得到（后端不设 CORS 头） */
-export async function boot(): Promise<{ token: string; name: string; version: string; kuake: string; temp?: string }> {
+export async function boot(): Promise<{ token: string; name: string; version: string; kuake: string; temp?: string; backend?: "native" | "cli" }> {
   const res = await fetch("/api/boot", { cache: "no-store" });
   if (!res.ok) throw new Error(`无法连接后端 (${res.status})`);
   const data = await res.json();

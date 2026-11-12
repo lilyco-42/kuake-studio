@@ -1,6 +1,6 @@
 [package]
 name = "kuake-studio"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Quark 网盘桌面客户端 —— lilyco 框架（Registry/App/Safety）+ shadcn/ui 前端"
 license = "MIT OR Apache-2.0"
@@ -28,6 +28,15 @@ rand = "0.8"
 aes-gcm = "0.10"
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 sha2 = "0.10"
+# 自研夸克 API 后端（src/quark.rs）：直接走官方 HTTP 接口，不再依赖本机 kuake CLI
+# 绝不开 "stream" 特性：它会拉入 wasm-streams，本地离线 registry 没有
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2", "blocking"] }
+sha1 = { version = "0.10", features = ["compress"] }
+md-5 = "0.10"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+qrcodegen = "1.8"
+httpdate = "1.0"
 
 [build-dependencies]
 # 只在目标平台是 Windows 时生效（见 build.rs）：把 assets/kuake-studio.rc
