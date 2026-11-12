@@ -1,39 +1,18 @@
-//! kuake-studio —— Quark 网盘客户端
+//! kuake-studio —— Quark 网盘客户端（桌面 Web 宿主入口，瘦壳）
 //!
-//! 骨架来自 lilyco 框架：每条 kuake 命令是一个 #[derive(App)] 结构体，
-//! 装进同一个 Registry 后，四端（CLI / TUI / Web / MCP）共用一份 schema 与安全门。
+//! 命令 / schema / 执行逻辑全在 kuake_studio 库（src/lib.rs）：桌面三平台与
+//! 移动 / 鸿蒙的进程内原生库共用同一份 Registry。本 bin 只在 desktop 特性下编译
+//! （见 Cargo.toml 的 required-features），职责仅剩：起本机 axum 服务、发随机
+//! 令牌、打开浏览器。Android / iOS / 鸿蒙不编这一段，改由 FFI C ABI 直接调库。
 //!
 //! 用法：
 //!   kuake-studio               # 起 Web 客户端（默认，自动开浏览器）
 //!   kuake-studio --cli help    # 纯命令行（lilyco-cli 渲染同一份 schema）
 //!   kuake-studio --mcp         # 作为 MCP server 暴露给 LLM
-//!   LILYCO_PORT=8888 kuake-studio
+//!   kuake-studio --schema      # 打印全部命令 schema JSON
+//!   KUAKE_STUDIO_PORT=8888 kuake-studio
 
-mod apps;
-mod crypt;
-mod kuake;
-mod login;
-mod paths;
-mod quark;
-mod security;
-mod server;
-
-use std::sync::Arc;
-
-use lilyco::prelude::*;
-
-fn build_registry() -> Registry {
-    let mut reg = Registry::new()
-        // 本地交互面：T0 只读 + T1 需确认全部放行，T2/T3 仍拒绝。
-        // 换成 DenyElevated 就是「只允许读」，可直接给无人值守场景用。
-        .with_policy(Arc::new(lilyco::__core::safety::Interactive));
-    for cmd in apps::commands() {
-        if let Err(e) = reg.register(cmd) {
-            panic!("注册命令失败: {e}");
-        }
-    }
-    reg
-}
+use kuake_studio::{build_registry, kuake, server};
 
 fn main() {
     kuake::load_env_fallback();

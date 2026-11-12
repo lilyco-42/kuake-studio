@@ -1,13 +1,32 @@
 [package]
 name = "kuake-studio"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
-description = "Quark 网盘桌面客户端 —— lilyco 框架（Registry/App/Safety）+ shadcn/ui 前端"
+description = "Quark 网盘客户端 —— lilyco 框架（Registry/App/Safety）+ shadcn/ui 前端；桌面安装包 + 移动/鸿蒙进程内原生库"
 license = "MIT OR Apache-2.0"
+
+# 桌面三平台（Windows / Linux / macOS）：编 [[bin]]，起本机 axum Web 宿主、
+# 打真安装包并自动开浏览器。移动 / 鸿蒙只编 [lib] 的 C ABI，不开端口、不打开浏览器。
+[features]
+default = ["desktop"]
+desktop = ["dep:axum", "dep:tokio", "dep:async-stream"]
 
 [[bin]]
 name = "kuake-studio"
 path = "src/main.rs"
+# 移动 / 鸿蒙 cargo build --no-default-features --lib 时不编这个 bin
+# （它依赖 axum/tokio/打开浏览器），否则 --no-default-features 会连带编 bin 而失败。
+required-features = ["desktop"]
+
+[lib]
+name = "kuake_studio"
+path = "src/lib.rs"
+# staticlib (.a)：Android JNI / iOS Swift / 鸿蒙 NAPI 宿主链接的进程内原生库。
+#   刻意不编 cdylib：交叉到 aarch64-unknown-linux-ohos 等目标时没有平台 SDK 的
+#   linker，产物 .so 会撞 "file in wrong format"；静态库只需 ar，六个 target 都能真编。
+#   宿主用自己平台的 NDK / Xcode / DevEco 工具链把 .a 链进 native 层即可。
+# rlib：桌面 bin 与 cargo test 依赖。
+crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 # lilyco 门面：默认特性 = CLI + MCP + core（纯 Rust，无图形重依赖）
@@ -19,10 +38,10 @@ path = "src/main.rs"
 lilyco = { git = "https://github.com/lilyco-42/lilyco", rev = "3f5ce094a893bd22debb435994e8c885a00e1571" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# 自建 Web 宿主（不复用 lilyco-gui 的页面，只借用它的执行/取消/进度语义）
-axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
-async-stream = "0.3"
+# 自建 Web 宿主（仅 desktop 特性）：不复用 lilyco-gui 的页面，只借执行/取消/进度语义
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"], optional = true }
+async-stream = { version = "0.3", optional = true }
 rand = "0.8"
 # 上传前加密插件（src/crypt.rs）：AES-256-GCM 分块 + PBKDF2-HMAC-SHA256 派生密钥
 aes-gcm = "0.10"

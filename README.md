@@ -1,9 +1,14 @@
 # Kuake Studio
 
-夸克网盘桌面客户端。**Rust 后端用 [lilyco](https://github.com/lilyco-42/lilyco) 框架**（一个 `App`/`Registry`
+夸克网盘客户端（Windows / Linux / macOS 桌面安装包 + Android / iOS / 鸿蒙进程内原生库）。
+**Rust 后端用 [lilyco](https://github.com/lilyco-42/lilyco) 框架**（一个 `App`/`Registry`
 派生同时驱动 CLI / Web / MCP 三端），**前端用 shadcn/ui**（radix-ui + Tailwind 4 + cva + lucide + sonner），
 网盘操作默认走**内置自研夸克 API**（`src/quark.rs`，reqwest 直连官方 HTTP 接口）；
 设 `KUAKE_STUDIO_BACKEND=cli` 才回退到本机 `kuake` CLI 子进程。
+
+Windows / Linux / macOS 发**可直接安装的桌面包**（自带 axum + 浏览器）；
+Android / iOS / 鸿蒙发**进程内 FFI 静态库**（宿主 App 自己链原生层 + WebView 渲染同一份 `dist/`）。
+不发假 App、不假称商店上架，详见 [六平台支持矩阵](#六平台支持矩阵)。
 
 ![文件](screenshot-files.png)
 
@@ -24,6 +29,52 @@
 `http://127.0.0.1:8787`。**默认不再需要安装 `kuake.exe` / `kuake` CLI**：内置原生后端
 首次在「账号」页点「**扫码登录**」用夸克 App 扫一下即可，无需手抄 cookie；仅当显式设 `KUAKE_STUDIO_BACKEND=cli` 时才需要本机 CLI。
 
+### 六平台支持矩阵
+
+| 平台 | Release 产物 | 形态 | 谁渲染 UI |
+| --- | --- | --- | --- |
+| Windows x64 | `*-windows-x64.msi` / `.zip` | 真安装包（自带 dist，自动开浏览器） | 客户端 axum + 系统浏览器 |
+| Linux x64 | `*-linux-x64.tar.gz` | 真安装包（同上） | 同上 |
+| macOS universal | `*-macos-universal.tar.gz` / `.app` | 真安装包（arm64 + x86_64 lipo，未签名） | 同上 |
+| Android arm64 | `*-android-arm64.tar.gz` | `libkuake_studio.a` + C 头 + ABI 自检源码 | **宿主 App**：JNI + WebView |
+| iOS arm64 | `*-ios-arm64.tar.gz` | 同上 | **宿主 App**：Swift + WKWebView |
+| 鸿蒙 / OpenHarmony arm64 | `*-ohos-arm64.tar.gz` | 同上 | **宿主 App**：NAPI + WebView |
+
+移动 / 鸿蒙这三个包**不是可安装的 App**，没有应用商店签名。桌面架构是「本机 axum 服务 +
+外部浏览器」，Android / iOS / 鸿蒙跑不了这个二进制；所以三平台改成**进程内 FFI 原生库**：
+同一套 lilyco Registry / 19 条命令 / 前端 `dist/` 全部复用，只是不启 HTTP、不开浏览器、
+不生成一次性令牌，宿主在进程内直接调 C ABI。
+
+宿主接法（`include/kuake_studio.h`，6 个函数，全部 UTF-8 / NULL 安全）：
+
+```c
+#include "kuake_studio.h"
+
+kuake_studio_set_cookie(cookie_utf8);        // 1) 启动后先注入凭据，成功返回 0
+char *schemas = kuake_studio_schemas();      // 2) 19 条命令的 JSON schema 数组
+char *out = kuake_studio_call("user", "{}"); // 3) 同步执行，返回标准信封
+kuake_studio_free(out);
+kuake_studio_free(schemas);
+char *boot = kuake_studio_boot();            // 4) mode:"in-process"，不含 token
+kuake_studio_free(boot);
+const char *v = kuake_studio_version();      // 静态缓冲，勿 free
+```
+
+- 除 `version()` 返回静态缓冲（**勿 free**）外，所有 `char*` 必须 `kuake_studio_free()`。
+- 全部入口对 NULL / 非法 UTF-8 / panic 有兜底：panic 绝不越过 `extern "C"`，会翻成失败信封
+  `{success:false,code:"PANIC",...}`；`boot()` 里没有 token、没有 cookie。
+- 库**刻意不读本机 `.env`**（不覆盖宿主注入的凭据）；`--no-default-features` 编出来的库
+  不含 axum / tokio / async-stream，纯 Rust 核心 + 同步调用，进度事件发到无人接收的通道不阻塞。
+- `tools/abi-selftest.c` 是版本无关的端到端自检（host 架构真链接 `.a` 跑 15 个断言），CI 每次都跑。
+
+> 为什么不套 Tauri 壳：Tauri 2 官方只支持 Android / iOS，**没有鸿蒙 / OpenHarmony**；
+> GitHub 的 ubuntu runner 自带 Android NDK 27.3 但没有 DevEco / OHOS SDK，macOS runner 才有 Xcode；
+> 这里用 zig 0.17.1 的 aarch64 musl sysroot 交叉编 C，不依赖 NDK / DevEco 的 C 工具链。
+> 所以用 Rust 官方 target（`aarch64-unknown-linux-ohos` 等）+ 进程内 FFI，CI 六个平台全都
+> **真编译 / 真检查**：产物是 arm64 静态库归档（`crate-type = ["staticlib","rlib"]`，不编 cdylib），
+> 逐个查成员架构与 `kuake_studio_*` 符号，不靠 `cargo check` 糊弄（check 不链接，
+> 曾漏掉 `cdylib` 交叉链接失败，也漏过 host gcc 混进归档的 x86-64 对象）。
+
 ### 从源码编译
 
 ```bash
@@ -34,6 +85,17 @@ cd .. && ./run.sh                  # 开发时用本机共享 target
 
 本机（开发机）的 `run.sh` 指向共享编译缓存 `~/.cache/lilyco-build/target`，
 普通用户请使用上面打包版自带的启动器。
+
+移动 / 鸿蒙只编核心库（不编 axum / tokio / 浏览器入口），出 `target/<triple>/release/libkuake_studio.a`：
+
+```bash
+rustup target add aarch64-linux-android   # 或 aarch64-apple-ios / aarch64-unknown-linux-ohos
+# Android / 鸿蒙：用 zig 0.17.1 的 aarch64 musl sysroot 交叉编 ring 的 C（见 CI）
+CC_aarch64_linux_android="$PWD/tools/cc-aarch64-musl.sh" \
+  cargo build --release --no-default-features --lib --target aarch64-linux-android
+```
+
+C 头文件在 `include/kuake_studio.h`，接入方式见[六平台支持矩阵](#六平台支持矩阵)。
 
 ### 同一个二进制，三种用法
 
@@ -108,6 +170,10 @@ lilyco Registry (19 个 #[derive(App)] 命令, SafetyTier T0 只读 / T1 需确�
 内置原生夸克 API（src/quark.rs：reqwest 直连官方 HTTP；cookie 来自 .env）
    └─ 可选 KUAKE_STUDIO_BACKEND=cli → kuake CLI 子进程（argv 数组、可取消、900s 超时）
 ```
+
+桌面走上面这条「axum + 浏览器」链路；移动 / 鸿蒙走进程内 FFI（见[六平台支持矩阵](#六平台支持矩阵)）：
+宿主直接调 `src/ffi.rs` 的 C ABI → `src/lib.rs` 的 `call()` → 同一个 lilyco Registry，
+跳过 axum / SSE / 一次性令牌，命令与 schema 完全一致。
 
 关键点：**界面不是手写 19 套表单**。后端 `GET /api/schema` 把 lilyco 每个命令的
 `CommandSchema`（参数名/类型/枚举/范围/必填/默认值）交给前端，前端用一套
@@ -278,15 +344,28 @@ cd ~/code/kuake-studio/tools
 
 ## 各平台构建（GitHub Actions）
 
-`.github/workflows/build.yml` 在推分支 / 推 `v*` 标签 / 手动时跑：
+`.github/workflows/build.yml` 在推分支 / 推 `v*` 标签 / 手动时跑，**六个 target 的 matrix 并行**：
 
-1. `check`：`cargo fmt --check` + `clippy -D warnings` + `cargo test`（Ubuntu，几十秒）。
-2. `package`：三个平台并行，各先 `bun install --frozen-lockfile` → `tsc --noEmit` →
-   `vite build` → `cargo build --release`，再自检 `--schema` 与 `/api/boot`：
+1. `check`：`cargo fmt --check` + `clippy -D warnings` + `cargo test`（含 `--no-default-features --lib`）
+   + **C ABI 端到端自检**（真链接 `libkuake_studio.a` 跑 `tools/abi-selftest.c`，15 个断言，Ubuntu）。
+2. `package`：六条并行。桌面三条先 `bun install --frozen-lockfile` → `tsc --noEmit` →
+   `vite build` → `cargo build --release`，再自检 `--schema`（19 条）与 `/api/boot`：
    - **windows-x64**：便携 `.zip` + WiX v3 的 `.msi`（exe 图标/版本信息由 `build.rs` + `embed-resource` 编进去）。
    - **linux-x64**：`tar.gz`（含 `start.sh`、`.desktop`、png 图标）。
    - **macos-universal**：分别编 arm64 / x86_64 再 `lipo` 合成，出 `tar.gz` + 带 icns 的 `.app`。
-3. `release`：打 `v*` 标签时把三平台产物传到 GitHub Release。
+   移动 / 鸿蒙三条走 `--no-default-features --lib`，出静态库 + C 头 + `BUILD_INFO.txt` +
+   `tools/abi-selftest.c` + `tools/cc-aarch64-musl.sh`，并**逐个 `.o` 校验归档全是 arm64**
+   且 `nm` 能查到 `kuake_studio_*` 符号（任一 `.o` 不是 arm64 直接判失败）：
+   - **android-arm64 / ohos-arm64**：ubuntu runner 下载 zig 0.17.1，用
+     `tools/cc-aarch64-musl.sh`（`zig cc -target aarch64-linux-musl` 并丢掉 cc-rs 追加的
+     `--target=<triple>`，因为 zig 不认 ohos 三元组）交叉编 ring 的 C。
+   - **ios-arm64**：macos runner 的 Xcode / `xcrun --sdk iphoneos` 提供 iPhoneOS SDK。
+   - `rustup target add` 对应 Rust 官方 target（`aarch64-linux-android` / `aarch64-apple-ios` / `aarch64-unknown-linux-ohos`）。
+3. `release`：打 `v*` 标签时把**六平台产物**传到 GitHub Release。
+
+> 为什么不用默认宿主机 `cc` / 裸 `clang`：前者会不加 `--target` 把 ring 的 C 编成 x86-64
+> 混进归档（`cargo check` 不会发现），后者会用错 x86-64 glibc 的 `uintptr_t` 而报
+> `8 == 4`。CI 逐个 `.o` 校验架构，杜绝这种「假成功」。
 
 想手动出包：Actions → build → Run workflow（填 tag 会顺带发布）。
 前端 `bun.lock` 里钉的是国内镜像，CI 里会先替换成 npmjs 官方源再 frozen 安装。
@@ -336,20 +415,25 @@ cd ~/code/kuake-studio/tools
 ## 目录
 
 ```
-src/main.rs       入口：--cli / --mcp / --schema / 默认 Web
+src/main.rs       桌面入口：--cli / --mcp / --schema / 默认 Web（仅 desktop 特性编）
+src/lib.rs        核心库：build_registry() / call() / set_cookie()（六平台共用，不依赖 axum）
+src/ffi.rs        C ABI：version/boot/schemas/set_cookie/call/free（catch_unwind 兜底）
+include/kuake_studio.h   C 头文件：宿主 App 接入的 6 个函数与约定
 src/apps.rs       19 个 #[derive(App)] 命令（lilyco 派生宏）
 src/crypt.rs      .kcrypt 容器：AES-256-GCM 分块 + PBKDF2-SHA256 派生密钥
 src/quark.rs      自研夸克 API：reqwest 直连官方接口，复刻 CLI 信封（默认后端）
 src/login.rs      夸克扫码登录：cookie jar / QR SVG / service_ticket 换 cookie / 校验昵称 / 备份写 .env
 src/kuake.rs      kuake CLI 回退后端 + 单点拦截（脏行解析、取消、超时、进度）
-src/server.rs     axum 宿主：boot/schema/run/progress/cancel/upload/login + 静态托管
-src/security.rs   回环闸 + 令牌
+src/server.rs     axum 宿主：boot/schema/run/progress/cancel/upload/login + 静态托管（desktop）
+src/security.rs   回环闸 + 令牌（desktop）
 src/paths.rs      HOME / USERPROFILE 与 ~ 展开（Windows 兼容）
 build.rs          Windows 目标嵌 exe 图标与版本信息
 wix/main.wxs      WiX v3 安装包源（文件清单由 heat 生成）
-.github/workflows/build.yml   三平台 CI / 出包 / 发 Release
+.github/workflows/build.yml   六平台 CI / 出包 / 发 Release
 tools/dump-cookies.mjs  从本机 Chrome cookie 库解出夸克 cookie 并刷新 ~/.config/kuake/.env
 tools/dump-kuake-cli-json.mjs  采集 kuake CLI 的 JSON/NDJSON 信封（原图 600 / 脱敏副本）
+tools/abi-selftest.c  host 架构真链接静态库跑的 C ABI 端到端自检（15 断言，版本无关）
+tools/cc-aarch64-musl.sh   zig cc 交叉编 C 的 wrapper（Android / 鸿蒙，绕开 host gcc 与 ohos 三元组）
 frontend/src/components/ui/   shadcn/ui 组件（基于 radix-ui 聚合包手写）
 frontend/src/components/      schema-form / command-dialog / login-dialog / 文件表格 / 控制台
 frontend/src/lib/             api / store / types / format

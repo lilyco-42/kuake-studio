@@ -1,9 +1,13 @@
 name: build
 
-# 三个平台各出一套安装包：
+# 六个平台：桌面三平台出真安装包，移动 / 鸿蒙出进程内 FFI 原生库（不发假 App）：
 #   windows -> 便携 zip + MSI（WiX v3，带开始菜单快捷方式和 exe 图标）
 #   linux   -> tar.gz（含 .desktop 和 png 图标）
 #   macos   -> 通用二进制（arm64 + x86_64 用 lipo 合成）+ .app 包
+#   android-arm64 / ios-arm64 / ohos-arm64 -> libkuake_studio.a + C 头 + ABI 自检源码
+#     宿主 App 用 JNI / Swift / NAPI 链接静态库，自己用 WebView 渲染前端 dist。
+#     Android / 鸿蒙的 C 代码用 tools/cc-aarch64-musl.sh（zig cc 的 aarch64 musl sysroot）交叉编译；
+#     逐个 .o 校验 arm64，杜绝 host gcc 混进归档造成的「假成功」。
 #
 # 触发：推分支（验证能编）、推 v* 标签（额外发布到 Releases）、手动。
 # 注意 workflow_dispatch 只有在默认分支上存在本文件时才出现，所以先推 main 再点。
@@ -56,6 +60,17 @@ jobs:
       - name: cargo test
         run: cargo test --locked
 
+      # 移动 / 鸿蒙用 --no-default-features：不编 axum/tokio，只留核心库 + C ABI
+      - name: cargo test（无 desktop 特性）
+        run: cargo test --locked --no-default-features --lib
+
+      - name: C ABI 端到端自检（真链接静态库）
+        run: |
+          set -euo pipefail
+          cargo build --locked --no-default-features --lib
+          cc -std=c11 -Wall -Wextra -I include -o /tmp/ks-abi-selftest tools/abi-selftest.c target/debug/libkuake_studio.a -lpthread -ldl -lm
+          /tmp/ks-abi-selftest
+
   # ── 各平台打包 ───────────────────────────────────────────────────────
   package:
     name: ${{ matrix.name }}
@@ -66,14 +81,29 @@ jobs:
       matrix:
         include:
           - name: windows-x64
+            kind: desktop
             os: windows-latest
             target: x86_64-pc-windows-msvc
           - name: linux-x64
+            kind: desktop
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - name: macos-universal
+            kind: desktop
             os: macos-latest
             target: universal2
+          - name: android-arm64
+            kind: native
+            os: ubuntu-latest
+            target: aarch64-linux-android
+          - name: ios-arm64
+            kind: native
+            os: macos-latest
+            target: aarch64-apple-ios
+          - name: ohos-arm64
+            kind: native
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-ohos
 
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +117,7 @@ jobs:
           key: ${{ matrix.name }}
 
       - uses: oven-sh/setup-bun@v2
+        if: matrix.kind == 'desktop'
         with:
           # bun.lock 是 1.4 写的（lockfileVersion 2）；钉死版本免得 latest 换格式
           bun-version: "1.4.4"
@@ -94,6 +125,7 @@ jobs:
       # bun.lock / bunfig.toml 里钉的是国内镜像（本地装依赖快），
       # GitHub runner 在境外，换成官方源。锁文件内容一致，--frozen-lockfile 仍然通过。
       - name: 前端依赖切到官方源
+        if: matrix.kind == 'desktop'
         shell: bash
         run: |
           node -e '
@@ -108,6 +140,7 @@ jobs:
           '
 
       - name: 构建前端
+        if: matrix.kind == 'desktop'
         working-directory: frontend
         run: |
           bun install --frozen-lockfile
@@ -329,6 +362,113 @@ jobs:
           tar -C pkg -czf "pkg/kuake-studio-$ver-macos-universal.tar.gz" "kuake-studio-$ver-macos-universal"
           ls -l pkg/
 
+      # ── Android (arm64)：zig cc 交叉编 C，不依赖 NDK ──────────────────────
+      - name: 构建（android arm64 静态库）
+        if: matrix.name == 'android-arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-linux-android
+          curl -fsSL "https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz" -o /tmp/zig.tar.xz
+          mkdir -p /tmp/zig-sdk
+          tar -xJf /tmp/zig.tar.xz -C /tmp/zig-sdk --strip-components=1
+          export PATH="/tmp/zig-sdk:$PATH"
+          zig version
+          export CC_aarch64_linux_android="$PWD/tools/cc-aarch64-musl.sh"
+          cargo build --release --locked --no-default-features --lib --target aarch64-linux-android
+
+      # ── iOS (arm64)：只有 macOS runner 有 Xcode / iPhoneOS SDK / xcrun ──────
+      - name: 构建（ios arm64 静态库）
+        if: matrix.name == 'ios-arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          sdk=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "iPhoneOS SDK: $sdk"
+          export SDKROOT="$sdk"
+          export IPHONEOS_DEPLOYMENT_TARGET=13.0
+          cargo build --release --locked --no-default-features --lib --target aarch64-apple-ios
+
+      # ── 鸿蒙 / OpenHarmony (arm64)：Rust 官方 target + zig cc 交叉编 C ─────
+      - name: 构建（鸿蒙 arm64 静态库）
+        if: matrix.name == 'ohos-arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-unknown-linux-ohos
+          curl -fsSL "https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz" -o /tmp/zig.tar.xz
+          mkdir -p /tmp/zig-sdk
+          tar -xJf /tmp/zig.tar.xz -C /tmp/zig-sdk --strip-components=1
+          export PATH="/tmp/zig-sdk:$PATH"
+          zig version
+          export CC_aarch64_unknown_linux_ohos="$PWD/tools/cc-aarch64-musl.sh"
+          cargo build --release --locked --no-default-features --lib --target aarch64-unknown-linux-ohos
+
+      - name: 自检（native：纯 arm64 归档 + C ABI 符号）
+        if: matrix.kind == 'native'
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib="$PWD/target/${{ matrix.target }}/release/libkuake_studio.a"
+          test -s "$lib"
+          tmp="$RUNNER_TEMP/ks-obj-check"
+          rm -rf "$tmp"; mkdir -p "$tmp"
+          (cd "$tmp" && ar x "$lib")
+          # 整库逐个 .o 校验：任何一个非 aarch64/arm64 都算失败
+          total=$(find "$tmp" -name "*.o" | wc -l | tr -d "[:space:]")
+          arm=$(find "$tmp" -name "*.o" -exec file {} + | grep -Eci "aarch64|arm64" || true)
+          echo "目标文件 $total 个，其中 arm64 $arm 个"
+          test "$total" -ge 100
+          test "$total" -eq "$arm"
+          # 先落盘再 grep：grep -q 提前退出会让 nm/strings 收到 SIGPIPE，pipefail 下误判失败
+          nm -g "$lib" > "$tmp/syms.txt" 2>/dev/null || true
+          if ! grep -q kuake_studio_version "$tmp/syms.txt"; then
+            strings "$lib" > "$tmp/strings.txt"
+            grep -q kuake_studio_version "$tmp/strings.txt"
+          fi
+          echo "C ABI 符号 kuake_studio_version 已导出"
+
+      - name: 打包（native：静态库 + C 头 + ABI 自检源码，非安装包）
+        if: matrix.kind == 'native'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          name="kuake-studio-$ver-${{ matrix.name }}"
+          target="${{ matrix.target }}"
+          stage="pkg/$name"
+          mkdir -p "$stage/include" "$stage/tools"
+          cp "target/$target/release/libkuake_studio.a" "$stage/"
+          cp include/kuake_studio.h "$stage/include/"
+          cp tools/abi-selftest.c tools/cc-aarch64-musl.sh "$stage/tools/"
+          cat > "$stage/README-native.md" <<'EOS'
+          # kuake-studio 进程内原生库
+
+          这个包不是可安装的 App，也没有应用商店签名。内容：
+
+          - libkuake_studio.a：纯 arm64 静态库，导出 kuake_studio_* C ABI
+          - include/kuake_studio.h：头文件
+          - tools/abi-selftest.c：host 架构可编译运行的 ABI 自检
+          - tools/cc-aarch64-musl.sh：Android / 鸿蒙 C 代码交叉编译 wrapper（zig cc）
+          - BUILD_INFO.txt：版本 / Rust target / 构建方式
+
+          宿主 App（Android Kotlin/JNI、iOS Swift、鸿蒙 ArkTS/NAPI）把 .a 链进原生层，
+          自己用 WebView 渲染前端 dist；启动时先调 kuake_studio_set_cookie 注入夸克凭据，
+          再调 kuake_studio_schemas() / kuake_studio_call() 驱动同一套命令。
+          本库不启动 HTTP 服务、不打开浏览器、不读本机 .env、不生成 token。
+
+          桌面三平台（Windows / Linux / macOS）请用对应安装包，不用这个库。
+          EOS
+          cat > "$stage/BUILD_INFO.txt" <<EOS
+          version=$ver
+          rust_target=$target
+          crate_type=staticlib
+          features=--no-default-features
+          EOS
+          tar -C pkg -czf "pkg/$name.tar.gz" "$name"
+          ls -l "pkg/$name.tar.gz"
+
       # ── 收集产物 ────────────────────────────────────────────────────
       - uses: actions/upload-artifact@v4
         with:
@@ -365,7 +505,7 @@ jobs:
           echo "发布 $TAG 到 $REPO"
           # 用 --notes-file + 单引号：--notes "..." 里的反引号会被 bash 当命令替换吃掉，文案里的文件名会整个消失
           {
-            echo "夸克网盘桌面客户端 $TAG。"
+            echo "夸克网盘客户端 $TAG：桌面三平台安装包 + Android / iOS / 鸿蒙进程内原生库。"
             echo
             printf '%s\n' \
               '- Windows：`kuake-studio-*-windows-x64.zip`（解压即用）/ `*.msi`（安装包）' \
@@ -375,6 +515,17 @@ jobs:
               '首次运行在「账号」页点「扫码登录」用夸克 App 扫一下即可；也可设置 `KUAKE_COOKIE` 或写进 `~/.config/kuake/.env`。' \
               '默认走内置原生夸克 API，无需安装 kuake CLI；设 KUAKE_STUDIO_BACKEND=cli 才回退到子进程。'
           } > release-notes.md
+          cat >> release-notes.md <<'NOTES'
+
+          - Android：kuake-studio-*-android-arm64.tar.gz（aarch64 静态库 + C 头 + ABI 自检源码）
+          - iOS：kuake-studio-*-ios-arm64.tar.gz（arm64 静态库 + C 头 + ABI 自检源码）
+          - 鸿蒙 / OpenHarmony：kuake-studio-*-ohos-arm64.tar.gz（aarch64 静态库 + C 头 + ABI 自检源码）
+
+          上面三个包不是可安装的 App，也没有应用商店签名。宿主 App 用 JNI / Swift / NAPI 把 libkuake_studio.a
+          链进原生层，自己用 WebView 渲染前端 dist；启动时先调 kuake_studio_set_cookie 注入夸克凭据，
+          再调 kuake_studio_schemas / kuake_studio_call 驱动同一套命令。
+          库不启动 HTTP 服务、不打开浏览器、不读本机 .env；桌面三平台请用对应安装包。
+          NOTES
           if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* -R "$REPO" --clobber
             gh release edit "$TAG" -R "$REPO" --notes-file release-notes.md
