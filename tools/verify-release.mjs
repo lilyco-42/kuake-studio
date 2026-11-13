@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 验证 kuake-studio 的 GitHub Release：资产齐全 / SHA256 / 匿名可下载 / 解包结构 /
 // BUILD_INFO / 逐 .o 架构 / 6 个 C ABI 符号 / macOS universal / Windows PE / Info.plist。
-// 用法: node tools/verify-release.mjs [--tag v0.5.1] [--dir DIR] [--no-download] [--json]
+// 用法: node tools/verify-release.mjs [--tag v0.5.2] [--dir DIR] [--no-download] [--json]
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';

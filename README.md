@@ -127,6 +127,12 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 19 个命令：`list` `info` `search` `user` `version` `download` `share-list` `create` `upload` `move`
 `copy` `rename` `delete` `share` `share-delete` `share-save` `encrypt` `decrypt` `login`。
 
+**宿主一致性（v0.5.2）**：`#[arg(default = …)]` 写在 schema 里，但除 CLI 外
+（clap 会填默认），Web/SSE、MCP、FFI 和嵌入方都是把调用方的 `args` JSON 直接交给
+handler。`build_registry()` 现在统一在注册前按 schema 补齐**缺失或 `null`** 的参数，
+显式给的值（含 `0` / 空串）一律不覆盖。修掉的实际症状：`search` 不传 `size` 曾只回 1 条
+（应为 50）、`share` 不传 `days` 直接报参数错、`login` 不传 `timeout` 只等 10 秒。
+
 ## 全盘搜索（v0.4.0）
 
 ![全盘搜索](screenshot-search.png)
@@ -385,8 +391,8 @@ cd ~/code/kuake-studio/tools
 node tools/verify-release.mjs
 
 # 指定 tag / 指定缓存目录 / 机器可读输出
-node tools/verify-release.mjs --tag v0.5.1 --json
-node tools/verify-release.mjs --tag v0.5.1 --dir /tmp/ks-verify --no-download
+node tools/verify-release.mjs --tag v0.5.2 --json
+node tools/verify-release.mjs --tag v0.5.2 --dir /tmp/ks-verify --no-download
 ```
 
 检查项：资产齐全（Windows 2 + Linux / macOS / Android / iOS / 鸿蒙各 1 = 7）、非草稿、

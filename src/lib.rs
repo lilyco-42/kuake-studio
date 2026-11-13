@@ -28,12 +28,60 @@ use lilyco::prelude::*;
 /// 本地交互面 T0 只读 + T1 需确认全部放行，T2/T3 仍拒绝。
 pub fn build_registry() -> Registry {
     let mut reg = Registry::new().with_policy(Arc::new(lilyco::__core::safety::Interactive));
-    for cmd in apps::commands() {
+    for mut cmd in apps::commands() {
+        // 在 register 的安全门「之前」补默认：策略门拿到的仍是调用方原始 args，
+        // 语义不变；补齐只发生在真正进入 from_args 之前。
+        if let Some(handler) = cmd.handler.take() {
+            let defaults = defaults_of(&cmd.schema);
+            cmd.handler = Some(with_defaults(defaults, handler));
+        }
         if let Err(e) = reg.register(cmd) {
             panic!("注册命令失败: {e}");
         }
     }
     reg
+}
+
+/// 从命令 schema 抽出 (参数名 → 默认值) 清单，供注册层补齐 args。
+///
+/// 背景：`#[derive(App)]` 会把 `#[arg(default = …)]` 写进 `ArgSchema.default`，
+/// 但生成的 `from_args` 取值时对缺失键一律 `unwrap_or(0 / "" / false)`，Enum 甚至
+/// 会对空串直接返回 InvalidArg。lilyco-cli 走 clap，clap 会按 schema 把默认值填进
+/// args，所以 CLI 正常；而 Web(SSE) / MCP / FFI / 任何嵌入方都是直接把调用方的
+/// args JSON 交给 handler —— 缺键就变成 0 或空串：search 不传 size 只回 1 条、
+/// share 不传 days 直接报错、login 不传 timeout 只等 10 秒。
+///
+/// 本项目所有宿主都从 build_registry() 取命令（见模块头注释），所以在这里统一
+/// 补一次即可全覆盖，不必改上游 lilyco、不必跨仓重新锁 rev。
+fn defaults_of(schema: &CommandSchema) -> Vec<(String, serde_json::Value)> {
+    schema
+        .args
+        .iter()
+        .filter_map(|a| a.default.as_ref().map(|d| (a.name.clone(), d.clone())))
+        .collect()
+}
+
+/// 给 handler 包一层「按 schema 补默认」。
+///
+/// 只补**缺失 / null** 的键（与 CommandSchema::validate_args「null 视为缺省」同口径）；
+/// 调用方显式给的值（含合法的 0 / 空串）一律不动 —— 幂等、不覆盖用户意图，
+/// 显式的非法值仍由 validate_args / 业务层判定。非对象 args 原样透传，
+/// 仍由 from_app 给出参数错误信封。defaults 为空时原样返回同一个 handler，零开销。
+fn with_defaults(defaults: Vec<(String, serde_json::Value)>, handler: Handler) -> Handler {
+    if defaults.is_empty() {
+        return handler;
+    }
+    Arc::new(move |ctx, args| {
+        let mut filled = args.clone();
+        if let Some(map) = filled.as_object_mut() {
+            for (name, default) in &defaults {
+                if matches!(map.get(name), None | Some(serde_json::Value::Null)) {
+                    map.insert(name.clone(), default.clone());
+                }
+            }
+        }
+        handler(ctx, &filled)
+    })
 }
 
 /// 同步执行一条命令，返回 JSON 信封（成功沿用命令自身的信封，失败统一包装）。
@@ -134,5 +182,71 @@ mod tests {
         // 非对象 args：validate_args / from_args 会给出参数错误信封，而不是 panic。
         let v = call("user", &serde_json::Value::Bool(true));
         assert_eq!(v["success"], false);
+    }
+
+    /// 回显 args 的假 handler：只验证补默认这一层，完全不碰网络。
+    fn echo_handler() -> Handler {
+        Arc::new(|_ctx, args| Ok(args.clone()))
+    }
+
+    #[test]
+    fn with_defaults_fills_missing_and_null_only() {
+        let defaults = vec![
+            ("page".to_string(), serde_json::json!(1)),
+            ("size".to_string(), serde_json::json!(50)),
+            ("days".to_string(), serde_json::json!("1")),
+        ];
+        let h = with_defaults(defaults, echo_handler());
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let ctx = Context::from_sender(tx);
+
+        // 缺失的补齐，显式给的不动
+        let got = h(&ctx, &serde_json::json!({ "size": 2 })).unwrap();
+        assert_eq!(got["page"], 1);
+        assert_eq!(got["size"], 2, "显式值不得被覆盖");
+        assert_eq!(got["days"], "1");
+
+        // null 与缺失同义（与 validate_args 口径一致）
+        let got2 = h(&ctx, &serde_json::json!({ "page": null, "size": null })).unwrap();
+        assert_eq!(got2["page"], 1);
+        assert_eq!(got2["size"], 50);
+
+        // 显式的 0 也尊重（是调用方选择，交由 validate_args / 业务层判定）
+        let got3 = h(&ctx, &serde_json::json!({ "page": 0 })).unwrap();
+        assert_eq!(got3["page"], 0);
+
+        // 非对象 args 原样透传，不 panic
+        let got4 = h(&ctx, &serde_json::Value::Bool(true)).unwrap();
+        assert_eq!(got4, serde_json::Value::Bool(true));
+    }
+
+    #[test]
+    fn empty_defaults_returns_same_handler() {
+        let h = echo_handler();
+        let same = with_defaults(vec![], Arc::clone(&h));
+        assert!(Arc::ptr_eq(&h, &same), "无 default 的命令不该被包一层");
+    }
+
+    /// 这些 default 是各宿主（HTTP/SSE/MCP/FFI）行为的前提；schema 一旦漂移，
+    /// 补默认就会失效（例如 search 又悄悄只回 1 条），所以在此钉死。
+    #[test]
+    fn registry_schemas_expose_defaults_hosts_rely_on() {
+        let reg = build_registry();
+        let expect = |cmd: &str, key: &str, val: serde_json::Value| {
+            let c = reg.get(cmd).unwrap_or_else(|| panic!("缺命令 {cmd}"));
+            let d = defaults_of(&c.schema);
+            assert!(
+                d.iter().any(|(k, v)| k == key && v == &val),
+                "{cmd}.{key} 应有 default {val}，实际 {d:?}"
+            );
+        };
+        expect("search", "page", serde_json::json!(1));
+        expect("search", "size", serde_json::json!(50));
+        expect("share-list", "page", serde_json::json!(1));
+        expect("share-list", "size", serde_json::json!(50));
+        expect("share", "days", serde_json::json!("1"));
+        expect("login", "timeout", serde_json::json!(300));
+        expect("list", "path", serde_json::json!("/"));
+        expect("create", "pdir", serde_json::json!("/"));
     }
 }
