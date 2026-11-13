@@ -445,9 +445,34 @@ jobs:
           mkdir -p "$stage/include" "$stage/tools"
           cp "target/$target/release/libkuake_studio.a" "$stage/"
           cp include/kuake_studio.h "$stage/include/"
-          cp tools/abi-selftest.c tools/cc-aarch64-musl.sh "$stage/tools/"
-          cat > "$stage/README-native.md" <<'EOS'
-          # kuake-studio 进程内原生库
+          cp tools/abi-selftest.c "$stage/tools/"
+          if [ "${{ matrix.name }}" = "ios-arm64" ]; then
+            cat > "$stage/README-native.md" <<'EOS'
+          # kuake-studio 进程内原生库（iOS arm64）
+
+          这个包不是可安装的 App，也没有应用商店签名。内容：
+
+          - libkuake_studio.a：纯 arm64 静态库，导出 kuake_studio_* C ABI
+          - include/kuake_studio.h：头文件
+          - tools/abi-selftest.c：host 架构可编译运行的 ABI 自检
+          - BUILD_INFO.txt：版本 / Rust target / 构建方式
+
+          复现构建：macOS + Xcode 16，rustup target add aarch64-apple-ios，
+          xcrun --sdk iphoneos --show-sdk-path 设入 SDKROOT，
+          IPHONEOS_DEPLOYMENT_TARGET=13.0，
+          cargo build --release --no-default-features --lib --target aarch64-apple-ios。
+
+          宿主 App（iOS Swift）把 .a 链进原生层，自己用 WebView 渲染前端 dist；
+          启动时先调 kuake_studio_set_cookie 注入夸克凭据，
+          再调 kuake_studio_schemas() / kuake_studio_call() 驱动同一套命令。
+          本库不启动 HTTP 服务、不打开浏览器、不读本机 .env、不生成 token。
+
+          桌面三平台（Windows / Linux / macOS）请用对应安装包，不用这个库。
+          EOS
+          else
+            cp tools/cc-aarch64-musl.sh "$stage/tools/"
+            cat > "$stage/README-native.md" <<'EOS'
+          # kuake-studio 进程内原生库（Android / 鸿蒙 arm64）
 
           这个包不是可安装的 App，也没有应用商店签名。内容：
 
@@ -460,13 +485,14 @@ jobs:
             cargo build --release --no-default-features --lib --target <target>
           - BUILD_INFO.txt：版本 / Rust target / 构建方式
 
-          宿主 App（Android Kotlin/JNI、iOS Swift、鸿蒙 ArkTS/NAPI）把 .a 链进原生层，
+          宿主 App（Android Kotlin/JNI、鸿蒙 ArkTS/NAPI）把 .a 链进原生层，
           自己用 WebView 渲染前端 dist；启动时先调 kuake_studio_set_cookie 注入夸克凭据，
           再调 kuake_studio_schemas() / kuake_studio_call() 驱动同一套命令。
           本库不启动 HTTP 服务、不打开浏览器、不读本机 .env、不生成 token。
 
           桌面三平台（Windows / Linux / macOS）请用对应安装包，不用这个库。
           EOS
+          fi
           cat > "$stage/BUILD_INFO.txt" <<EOS
           version=$ver
           rust_target=$target

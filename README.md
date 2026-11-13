@@ -374,6 +374,34 @@ cd ~/code/kuake-studio/tools
 想手动出包：Actions → build → Run workflow（填 tag 会顺带发布）。
 前端 `bun.lock` 里钉的是国内镜像，CI 里会先替换成 npmjs 官方源再 frozen 安装。
 
+## 验证已发布的 Release（六平台产物）
+
+`tools/verify-release.mjs` 把每次发版后的手工核对固化成一条命令：**匿名拉下 7 个资产，
+逐项对照 GitHub 的 `sha256:` digest，解包后校验结构、架构与 ABI 符号**；
+90+ 项检查，任一失败退出码非 0。
+
+```bash
+# 默认验最新版（gh 已登录读 Release 元数据；下载走匿名 curl）
+node tools/verify-release.mjs
+
+# 指定 tag / 指定缓存目录 / 机器可读输出
+node tools/verify-release.mjs --tag v0.5.1 --json
+node tools/verify-release.mjs --tag v0.5.1 --dir /tmp/ks-verify --no-download
+```
+
+检查项：资产齐全（Windows 2 + Linux / macOS / Android / iOS / 鸿蒙各 1 = 7）、非草稿、
+匿名可下载（去掉 `GH_TOKEN` 后 HEAD 返回 200）、SHA256 与 API digest 逐字节一致、
+解包结构（桌面含 `dist/index.html`，Windows exe 是 PE32+，macOS `lipo -info` 同时有
+x86_64 + arm64，`Info.plist` 的 `CFBundleVersion` 等于 tag 版本）、native 三包
+`BUILD_INFO.txt` 的 version / rust_target / crate_type、逐个 `.o` 的架构
+（Android / 鸿蒙全 ELF aarch64、iOS 全 Mach-O arm64），以及 6 个 `kuake_studio_*`
+导出符号。iOS 包另有一道文案护栏：`README-native.md` 不得混入 Android / 鸿蒙专用的
+`zig` / `AR_aarch64_linux_android` 复现说明（v0.5.1 修）。
+
+前置：`gh` CLI 能读 Release 元数据；本机需 `curl` `file` `ar` `nm` `tar` `unzip`
+`llvm-lipo` `llvm-objdump`。这一步是**静态 + 完整性**校验；Linux 桌面包的运行态
+（`--cli` / `/api/boot` / SSE）与 Windows 包在 Wine 里的安装、启动另做实测。
+
 ## 实测记录：Windows 包在 Wine 里跑过
 
 发布后用 **Wine 11.21**（win64 prefix）真跑了 `v0.1.0` 的 Windows 产物，不只是交叉编译检查。
@@ -438,6 +466,7 @@ tools/dump-cookies.mjs  从本机 Chrome cookie 库解出夸克 cookie 并刷新
 tools/dump-kuake-cli-json.mjs  采集 kuake CLI 的 JSON/NDJSON 信封（原图 600 / 脱敏副本）
 tools/abi-selftest.c  host 架构真链接静态库跑的 C ABI 端到端自检（15 断言，版本无关）
 tools/cc-aarch64-musl.sh   zig cc 交叉编 C 的 wrapper（Android / 鸿蒙，绕开 host gcc 与 ohos 三元组）
+tools/verify-release.mjs  一条命令核对 Release 7 资产的 SHA256 / 解包结构 / .o 架构 / ABI 符号
 frontend/src/components/ui/   shadcn/ui 组件（基于 radix-ui 聚合包手写）
 frontend/src/components/      schema-form / command-dialog / login-dialog / 文件表格 / 控制台
 frontend/src/lib/             api / store / types / format
