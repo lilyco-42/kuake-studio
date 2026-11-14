@@ -621,31 +621,35 @@ jobs:
           echo "发布 $TAG 到 $REPO"
           # 用 --notes-file + 单引号：--notes "..." 里的反引号会被 bash 当命令替换吃掉，文案里的文件名会整个消失
           {
-            echo "夸克网盘客户端 $TAG：桌面三平台安装包 + Android / iOS / 鸿蒙进程内原生库。"
+            echo "夸克网盘客户端 $TAG：桌面三平台安装包 + Android APK + iOS / 鸿蒙进程内原生库。"
             echo
             printf '%s\n' \
               '- Windows：`kuake-studio-*-windows-x64.zip`（解压即用）/ `*.msi`（安装包）' \
               '- Linux：`kuake-studio-*-linux-x64.tar.gz` 解压后运行一次 `./install.sh`（桌面图标 + 开机自启，双击即用）' \
               '- macOS：`kuake-studio-*-macos-universal.tar.gz` 或解压出的 `kuake-studio.app`（未签名，首次打开需右键 → 打开）' \
-            '- Android：`kuake-studio-*-android.apk` 直接装（arm64 真机 + x86_64 模拟器同一份，debug 签名）' \
-              '三个桌面平台启动后都会自动打开浏览器，用户无需知道 IP / 端口（服务只监听 127.0.0.1:8787）。' \
+              '- Android：`kuake-studio-*-android.apk` 直接装（arm64 真机 + x86_64 模拟器同一份，debug 签名）' \
               '' \
+              '桌面三平台启动后都会自动打开浏览器，用户无需知道 IP / 端口（服务只监听 127.0.0.1:8787）。' \
               '首次运行在「账号」页点「扫码登录」用夸克 App 扫一下即可；也可设置 `KUAKE_COOKIE` 或写进 `~/.config/kuake/.env`。' \
-              '默认走内置原生夸克 API，无需安装 kuake CLI；设 KUAKE_STUDIO_BACKEND=cli 才回退到子进程。'
+              '默认走内置原生夸克 API，无需安装 kuake CLI；设 KUAKE_STUDIO_BACKEND=cli 才回退到子进程。' \
+              '' \
+              '### Android APK 怎么用' \
+              '' \
+              '- 传到手机点开安装，首次需允许「安装未知来源应用」；装完点图标即用。' \
+              '- App 内是 WebView + 进程内 axum，界面与桌面包完全一致；arm64 真机与 x86_64 模拟器同一份包。' \
+              '- debug 自签名、不上应用商店；扫码登录在 App 里同样可用。' \
+              '' \
+              '### 给宿主 App 链的静态库' \
+              '' \
+              '- Android：`kuake-studio-*-android-arm64.tar.gz`（aarch64 静态库 + C 头 + ABI 自检源码）' \
+              '- iOS：`kuake-studio-*-ios-arm64.tar.gz`（arm64 静态库 + C 头 + ABI 自检源码）' \
+              '- 鸿蒙 / OpenHarmony：`kuake-studio-*-ohos-arm64.tar.gz`（aarch64 静态库 + C 头 + ABI 自检源码）' \
+              '' \
+              '这三个包不是可安装的 App，也没有应用商店签名。宿主 App 用 JNI / Swift / NAPI 把 libkuake_studio.a' \
+              '链进原生层，自己用 WebView 渲染前端 dist；启动时先调 kuake_studio_set_cookie 注入夸克凭据，' \
+              '再调 kuake_studio_schemas / kuake_studio_call 驱动同一套命令。' \
+              '库不启动 HTTP 服务、不打开浏览器、不读本机 .env；要装到手机上用请下 APK。'
           } > release-notes.md
-          cat >> release-notes.md <<'NOTES'
-
-          - Android（想直接装上用）：kuake-studio-*-android.apk —— 双击安装即可，App 内置前端与进程内服务。
-  arm64 真机与 x86_64 模拟器同一份 APK；debug 自签名，首次安装需允许「安装未知来源应用」。
-- Android（想做宿主 App）：kuake-studio-*-android-arm64.tar.gz（aarch64 静态库 + C 头 + ABI 自检源码）
-          - iOS：kuake-studio-*-ios-arm64.tar.gz（arm64 静态库 + C 头 + ABI 自检源码）
-          - 鸿蒙 / OpenHarmony：kuake-studio-*-ohos-arm64.tar.gz（aarch64 静态库 + C 头 + ABI 自检源码）
-
-          上面三个包不是可安装的 App，也没有应用商店签名。宿主 App 用 JNI / Swift / NAPI 把 libkuake_studio.a
-          链进原生层，自己用 WebView 渲染前端 dist；启动时先调 kuake_studio_set_cookie 注入夸克凭据，
-          再调 kuake_studio_schemas / kuake_studio_call 驱动同一套命令。
-          库不启动 HTTP 服务、不打开浏览器、不读本机 .env；桌面三平台请用对应安装包。
-          NOTES
           if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* -R "$REPO" --clobber
             gh release edit "$TAG" -R "$REPO" --notes-file release-notes.md
