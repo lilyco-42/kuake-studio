@@ -72,7 +72,7 @@ Linux 的 `./install.sh` 把程序装到 `~/.local/opt/kuake-studio`、注册一
 **App 进程内**（`127.0.0.1`），UI 交给 WebView，所以用户看到的是同一个界面、同一套命令。
 
 iOS / 鸿蒙以及 `*-android-arm64.tar.gz` 这三个是**进程内 FFI 原生库**，不是可安装的 App、
-没有应用商店签名：同一套 lilyco Registry / 22 条命令 / 前端 `dist/` 全部复用，只是不启 HTTP、
+没有应用商店签名：同一套 lilyco Registry / 25 条命令 / 前端 `dist/` 全部复用，只是不启 HTTP、
 不开浏览器、不生成一次性令牌，宿主在进程内直接调 C ABI。
 
 宿主接法（`include/kuake_studio.h`，6 个函数，全部 UTF-8 / NULL 安全）：
@@ -81,7 +81,7 @@ iOS / 鸿蒙以及 `*-android-arm64.tar.gz` 这三个是**进程内 FFI 原生�
 #include "kuake_studio.h"
 
 kuake_studio_set_cookie(cookie_utf8);        // 1) 启动后先注入凭据，成功返回 0
-char *schemas = kuake_studio_schemas();      // 2) 22 条命令的 JSON schema 数组
+char *schemas = kuake_studio_schemas();      // 2) 25 条命令的 JSON schema 数组
 char *out = kuake_studio_call("user", "{}"); // 3) 同步执行，返回标准信封
 kuake_studio_free(out);
 kuake_studio_free(schemas);
@@ -163,7 +163,7 @@ KUAKE_STUDIO_APK_DEBUGGABLE=1 ./android/tools/build-apk.sh   # → pkg/kuake-stu
 KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 kuake 子进程
 ./run.sh --cli search --q README --json        # 全盘搜索文件名（仅内置原生后端）
 ./run.sh --mcp                                  # 以 MCP server 暴露给 AI
-./run.sh --schema                               # 打印 22 个命令的 JSON Schema
+./run.sh --schema                               # 打印 25 个命令的 JSON Schema
 ./run.sh --cli list --openai-tool               # 顺便白送 OpenAI/Anthropic/Gemini tool 定义
 ```
 
@@ -171,16 +171,18 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 
 | 页面 | 能力 |
 | --- | --- |
-| 文件 | 目录浏览、面包屑/历史栈、排序（名称/时间/大小）、新建文件夹、上传（可选**上传前加密**）、重命名、移动、复制、删除、详情、下载、**解密到本机**、创建分享 |
+| 文件 | 目录浏览、面包屑/历史栈、排序（名称/时间/大小）、新建文件夹、上传（可选**上传前加密**）、重命名、移动、复制、删除、详情、下载、**解密到本机**、创建分享、**勾选多选后批量移动 / 复制 / 删除**（v0.5.6） |
 | 搜索 | **全盘按文件名搜索**、命中高亮、完整路径反查、复制路径、跳到所在目录、分页加载（v0.4.0） |
 | 分享 | 我的分享列表（有效期/浏览/转存）、复制链接、浏览器打开、取消分享、转存他人分享 |
 | 回收站 | 最近删除列表（删除时间/剩余天数）、勾选后**批量恢复**、**永久删除**、分页加载（v0.5.5） |
 | 账号 | 昵称、会员类型与到期、容量占用进度、网盘后端类型与版本、**扫码登录**（一键刷新凭据） |
 | 活动日志 | 每次调用的实时进度/耗时/错误，可折叠、可清空 |
 
-22 个命令：`list` `info` `search` `user` `version` `download` `share-list` `recycle-list` `create` `upload`
+25 个命令：`list` `info` `search` `user` `version` `download` `share-list` `recycle-list` `create` `upload`
 `move` `copy` `rename` `delete` `share` `share-delete` `share-save` `recycle-restore`
-`recycle-purge` `encrypt` `decrypt` `login`。
+`recycle-purge` `encrypt` `decrypt` `login` `batch-delete` `batch-move` `batch-copy`。
+
+其中 `batch-*` 是 [v0.5.6 文件页多选批量](#文件页多选批量v056) 新增的命令。
 
 **宿主一致性（v0.5.2）**：`#[arg(default = …)]` 写在 schema 里，但除 CLI 外
 （clap 会填默认），Web/SSE、MCP、FFI 和嵌入方都是把调用方的 `args` JSON 直接交给
@@ -247,6 +249,45 @@ handler。`build_registry()` 现在统一在注册前按 schema 补齐**缺失�
   `recycle-list` 是 T0 只读。`records` 在 schema 里是 `list` 类型，
   前端 `SchemaForm` 渲染成「每行一个」的文本框，空行会被剔掉。
 
+## 文件页多选批量（v0.5.6）
+
+「文件」页现在每行有 checkbox、表头可全选：勾中后出现「已选 N 项」操作条，
+可一次**批量移动 / 批量复制 / 批量删除**。
+
+```bash
+./run.sh --cli batch-delete --paths /06_待整理/a /06_待整理/b
+./run.sh --cli batch-move   --dest /06_待整理/d1 --paths /a /b
+./run.sh --cli batch-copy   --dest /06_待整理/d2 --paths /a /b
+```
+
+- 三条命令都是 T1 写操作，Web 端走确认对话框；`paths` 在 schema 里是
+  `list` 类型，前端用 `preset` 把勾中项的完整路径数组直接透传、并隐藏该字段，
+  用户只需在对话框里改目标目录 `dest`（默认当前目录）。
+- 底层一条请求打完：`POST /1/clouddrive/file/{delete,move,copy}` 的
+  `filelist` 一次传多个 `fid`（move/copy 另带 `to_pdir_fid`），拿到**单个**
+  `task_id` 后轮询到 `status==2`，返回体带 `count`。单条 `delete` / `move` /
+  `copy` 的形状完全没变，仍走同一个 `batch_body()` 构造，只是 `filelist` 长度为 1。
+- 写操作前逐条 `resolve()` 把路径换成 fid，**任一路径解析失败就整体中止**，
+  不会发一个掺了失效 fid 的半成品请求（夸克对失效 fid 回 `400 / 14001 Bad Parameter`）。
+- 勾中项的身份用 `fid`；列表刷新后按本页存活 fid 自动剔除失效选中项，
+  切换目录、刷新、失败都会清空选择，不会把上一页的选择带到下一页。
+
+### 实测记录：批量端到端（v0.5.6）
+
+真实账号上用 8787 的 HTTP/SSE 通道跑完一整轮，5 个探针目录全部清干净：
+
+| 步骤 | 命令 | 结果 |
+| --- | --- | --- |
+| 造目标 | 5× `create {name, pdir:/06_待整理}` | 5 个目录创建成功 |
+| 批量复制 | `batch-copy {paths:[3 个], dest:__ks_b56_d1__}` | `批量复制成功`、`count=3`，`list d1` 得 3 项 |
+| 批量移动 | `batch-move {paths:[d1 里 3 个], dest:__ks_b56_d2__}` | `批量移动成功`、`count=3`，`list d2` 得 3 项 |
+| 批量删除 | `batch-delete {paths:[5 个顶层]}` | `批量删除成功`、`count=5`，`list` 里探针 0 项 |
+| 清场 | `recycle-purge {records:[5 个 record_id]}` | `已永久删除`；`recycle-list` 的 `total` 回到 1、残留 0 |
+
+`cargo test --locked --lib` 62 项全过（含 `batch_body` 形状、argv 约定、
+三条 schema 的 `list` 参数与 T1 标记），`cargo clippy -- -D warnings` 零警告；
+前端 `npm run typecheck` / `npm run build` 通过。
+
 ## 架构
 
 ```
@@ -259,7 +300,7 @@ handler。`build_registry()` 现在统一在注册前按 schema 补齐**缺失�
    ▼
 axum 0.8 (127.0.0.1 only, 回环 Host/Origin 校验 + 常量时间令牌)
    ▼
-lilyco Registry (22 个 #[derive(App)] 命令, SafetyTier T0 只读 / T1 需确认)
+lilyco Registry (25 个 #[derive(App)] 命令, SafetyTier T0 只读 / T1 需确认)
    ▼
 内置原生夸克 API（src/quark.rs：reqwest 直连官方 HTTP；cookie 来自 .env）
    └─ 可选 KUAKE_STUDIO_BACKEND=cli → kuake CLI 子进程（argv 数组、可取消、900s 超时）
@@ -270,7 +311,7 @@ iOS / 鸿蒙走进程内 FFI（见[六平台支持矩阵](#六平台支持矩阵
 宿主直接调 `src/ffi.rs` 的 C ABI → `src/lib.rs` 的 `call()` → 同一个 lilyco Registry，
 跳过 axum / SSE / 一次性令牌，命令与 schema 完全一致。
 
-关键点：**界面不是手写 22 套表单**。后端 `GET /api/schema` 把 lilyco 每个命令的
+关键点：**界面不是手写 25 套表单**。后端 `GET /api/schema` 把 lilyco 每个命令的
 `CommandSchema`（参数名/类型/枚举/范围/必填/默认值）交给前端，前端用一套
 `SchemaForm` 渲染出对应控件，`CommandDialog` 提交时只发送 schema 声明过的键。
 加命令只需要在 `src/apps.rs` 里加一个 struct。
@@ -445,7 +486,7 @@ cd ~/code/kuake-studio/tools
 1. `check`：`cargo fmt --check` + `clippy -D warnings` + `cargo test`（含 `--no-default-features --lib`）
    + **C ABI 端到端自检**（真链接 `libkuake_studio.a` 跑 `tools/abi-selftest.c`，15 个断言，Ubuntu）。
 2. `package`：六条并行。桌面三条先 `bun install --frozen-lockfile` → `tsc --noEmit` →
-   `vite build` → `cargo build --release`，再自检 `--schema`（22 条）与 `/api/boot`：
+   `vite build` → `cargo build --release`，再自检 `--schema`（25 条）与 `/api/boot`：
    - **windows-x64**：便携 `.zip` + WiX v3 的 `.msi`（exe 图标/版本信息由 `build.rs` + `embed-resource` 编进去）。
    - **linux-x64**：`tar.gz`（含 `start.sh`、`.desktop`、png 图标）。
    - **macos-universal**：分别编 arm64 / x86_64 再 `lipo` 合成，出 `tar.gz` + 带 icns 的 `.app`。
@@ -634,7 +675,7 @@ src/main.rs       桌面入口：--cli / --mcp / --schema / 默认 Web（仅 des
 src/lib.rs        核心库：build_registry() / call() / set_cookie()（六平台共用，不依赖 axum）
 src/ffi.rs        C ABI：version/boot/schemas/set_cookie/call/free（catch_unwind 兜底）
 include/kuake_studio.h   C 头文件：宿主 App 接入的 6 个函数与约定
-src/apps.rs       22 个 #[derive(App)] 命令（lilyco 派生宏）
+src/apps.rs       25 个 #[derive(App)] 命令（lilyco 派生宏）
 src/crypt.rs      .kcrypt 容器：AES-256-GCM 分块 + PBKDF2-SHA256 派生密钥
 src/quark.rs      自研夸克 API：reqwest 直连官方接口，复刻 CLI 信封（默认后端）
 src/login.rs      夸克扫码登录：cookie jar / QR SVG / service_ticket 换 cookie / 校验昵称 / 备份写 .env

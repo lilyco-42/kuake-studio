@@ -919,6 +919,9 @@ pub fn dispatch(ctx: &Context, argv: &[String]) -> Result<Value, AppError> {
         "copy" => cmd_move_copy(&api, argv, "copy"),
         "rename" => cmd_rename(&api, argv),
         "delete" => cmd_delete(&api, argv),
+        "batch-delete" => cmd_batch_delete(&api, argv),
+        "batch-move" => cmd_batch_move_copy(&api, argv, "move"),
+        "batch-copy" => cmd_batch_move_copy(&api, argv, "copy"),
         "recycle-list" => cmd_recycle_list(&api, argv),
         "recycle-restore" => cmd_recycle_action(&api, argv, false),
         "recycle-purge" => cmd_recycle_action(&api, argv, true),
@@ -1193,6 +1196,88 @@ fn cmd_create(api: &Api, argv: &[String]) -> Result<Value, AppError> {
     Ok(ok("创建文件夹成功", data_of(&v)?))
 }
 
+/// 删除/移动/复制共用同一个批量 body：filelist 里放 fid，移动/复制再带目标目录 fid。
+/// 单条命令也走这里，保证单条与批量的请求体逐字同形（夸克实测支持多 fid）。
+fn batch_body(fids: &[String], to: Option<&str>) -> Value {
+    let mut body = json!({
+        "action_type": 1,
+        "exclude_fids": [],
+        "filelist": fids,
+    });
+    if let Some(dir) = to {
+        body["to_pdir_fid"] = json!(dir);
+    }
+    body
+}
+
+/// 批量 argv 里可能带空串/首尾空格，先清一遍。
+fn batch_paths(paths: &[String]) -> Vec<&str> {
+    paths
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// 批量操作前把所有路径一次性解析成 fid：任一路径解析失败就整体中止，
+/// 绝不给夸克发「一半有效 fid」的半成品请求（实测会 400 code 14001）。
+fn resolve_fids(api: &Api, paths: &[String]) -> Result<Vec<String>, AppError> {
+    let paths = batch_paths(paths);
+    if paths.is_empty() {
+        return Err(AppError::InvalidArg("至少给一个路径".into()));
+    }
+    let mut fids = Vec::with_capacity(paths.len());
+    for p in paths {
+        fids.push(api.resolve(p)?.fid);
+    }
+    Ok(fids)
+}
+
+/// 批量删除：一次请求、一个 task_id，选中项全部进回收站。
+fn cmd_batch_delete(api: &Api, argv: &[String]) -> Result<Value, AppError> {
+    let fids = resolve_fids(api, &argv[1..])?;
+    let v = api.post("/1/clouddrive/file/delete", &[], batch_body(&fids, None))?;
+    let mut d = wait_task(api, &v, "批量删除")?
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    d.insert("count".to_string(), json!(fids.len()));
+    Ok(ok("批量删除成功", Value::Object(d)))
+}
+
+/// 批量移动/复制：argv 约定 [cmd, dest, path1, path2, ...]，dest 在 argv[1] 消歧。
+fn cmd_batch_move_copy(api: &Api, argv: &[String], which: &str) -> Result<Value, AppError> {
+    let dest = if opt(argv, 1).is_empty() {
+        "/"
+    } else {
+        opt(argv, 1)
+    };
+    let fids = resolve_fids(api, &argv[2..])?;
+    let to = api.dest_dir_fid(dest)?;
+    let ep = if which == "move" {
+        "/1/clouddrive/file/move"
+    } else {
+        "/1/clouddrive/file/copy"
+    };
+    let label = if which == "move" {
+        "批量移动"
+    } else {
+        "批量复制"
+    };
+    let v = api.post(ep, &[], batch_body(&fids, Some(to.as_str())))?;
+    let mut d = wait_task(api, &v, label)?
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    d.insert("count".to_string(), json!(fids.len()));
+    let msg = if which == "move" {
+        "批量移动成功"
+    } else {
+        "批量复制成功"
+    };
+    Ok(ok(msg, Value::Object(d)))
+}
+
 fn cmd_move_copy(api: &Api, argv: &[String], which: &str) -> Result<Value, AppError> {
     let src = need(argv, 1, "src")?;
     let dest = if opt(argv, 2).is_empty() {
@@ -1210,7 +1295,7 @@ fn cmd_move_copy(api: &Api, argv: &[String], which: &str) -> Result<Value, AppEr
     let v = api.post(
         ep,
         &[],
-        json!({ "action_type": 1, "exclude_fids": [], "filelist": [src_fid], "to_pdir_fid": to }),
+        batch_body(std::slice::from_ref(&src_fid), Some(to.as_str())),
     )?;
     let mut d = wait_task(api, &v, if which == "move" { "移动" } else { "复制" })?
         .as_object()
@@ -1250,7 +1335,7 @@ fn cmd_delete(api: &Api, argv: &[String]) -> Result<Value, AppError> {
     let v = api.post(
         "/1/clouddrive/file/delete",
         &[],
-        json!({ "action_type": 1, "exclude_fids": [], "filelist": [fid] }),
+        batch_body(std::slice::from_ref(&fid), None),
     )?;
     let mut d = wait_task(api, &v, "删除")?
         .as_object()
@@ -1992,6 +2077,37 @@ fn cmd_share_save(api: &Api, argv: &[String]) -> Result<Value, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_body_shapes_match_single_and_batch() {
+        let fids = vec!["a".to_string(), "b".to_string()];
+        let del = batch_body(&fids, None);
+        assert_eq!(del["action_type"], 1);
+        assert_eq!(del["exclude_fids"], json!([]));
+        assert_eq!(del["filelist"], json!(["a", "b"]));
+        assert!(del.get("to_pdir_fid").is_none());
+        let mv = batch_body(&fids, Some("0"));
+        assert_eq!(mv["to_pdir_fid"], "0");
+        assert_eq!(mv["filelist"].as_array().unwrap().len(), 2);
+        // 单条命令走同一函数，body 与历史逐字等价
+        let one = batch_body(&["x".to_string()], None);
+        assert_eq!(one["filelist"], json!(["x"]));
+        let one_mv = batch_body(&["x".to_string()], Some("9"));
+        assert_eq!(one_mv["filelist"], json!(["x"]));
+        assert_eq!(one_mv["to_pdir_fid"], "9");
+    }
+
+    #[test]
+    fn batch_paths_drops_blanks_and_trims() {
+        let raw = vec![
+            "  /a  ".to_string(),
+            String::new(),
+            "   ".to_string(),
+            "/b".to_string(),
+        ];
+        assert_eq!(batch_paths(&raw), vec!["/a", "/b"]);
+        assert!(batch_paths(&[]).is_empty());
+    }
 
     #[test]
     fn ensure_accepts_both_envelope_shapes() {

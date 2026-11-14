@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -49,6 +50,11 @@ function isEncrypted(name: string): boolean {
   return name.toLowerCase().endsWith(".kcrypt");
 }
 
+/** 多选身份：优先 fid，缺失时退回路径（与 pathOf 一致） */
+function itemId(item: KuakeFile, baseDir: string): string {
+  return item.fid || item.path || joinPath(baseDir, item.file_name);
+}
+
 type SortKey = "name" | "size" | "mtime";
 type SortDir = "asc" | "desc";
 
@@ -69,7 +75,9 @@ type DialogState =
   | { kind: "info"; target: KuakeFile }
   | { kind: "download"; target: KuakeFile }
   | { kind: "upload" }
-  | { kind: "decrypt"; target: KuakeFile };
+  | { kind: "decrypt"; target: KuakeFile }
+  | { kind: "batch-move" }
+  | { kind: "batch-copy" };
 
 /** 当前浏览目录 + 文件列表。所有操作完成后都回到这里刷新。 */
 export function FilesView({
@@ -92,6 +100,8 @@ export function FilesView({
   });
   const [dialog, setDialog] = React.useState<DialogState>({ kind: "none" });
   const [confirmDelete, setConfirmDelete] = React.useState<KuakeFile | null>(null);
+  const [confirmBatchDelete, setConfirmBatchDelete] = React.useState(false);
+  const [selected, setSelected] = React.useState<string[]>([]);
   const [history, setHistory] = React.useState<string[]>([]);
 
   const argsOf = React.useCallback(
@@ -108,8 +118,12 @@ export function FilesView({
       }
       try {
         const data = await run<{ list: KuakeFile[] }>("list", { path }, "列出目录");
-        setDir({ path, items: data?.list ?? [], loading: false, error: null });
+        const list = data?.list ?? [];
+        const alive = new Set(list.map((it) => itemId(it, path)));
+        setSelected((cur) => cur.filter((id) => alive.has(id)));
+        setDir({ path, items: list, loading: false, error: null });
       } catch (e) {
+        setSelected([]);
         setDir({
           path,
           items: [],
@@ -150,6 +164,14 @@ export function FilesView({
   };
 
   const pathOf = (item: KuakeFile) => item.path || joinPath(dir.path, item.file_name);
+  const idOf = (item: KuakeFile) => itemId(item, dir.path);
+
+  const selectedItems = dir.items.filter((it) => selected.includes(idOf(it)));
+  const selectedPaths = selectedItems.map(pathOf);
+  const allChecked = dir.items.length > 0 && selected.length === dir.items.length;
+  const toggleAll = () => setSelected(allChecked ? [] : dir.items.map(idOf));
+  const toggleOne = (id: string) =>
+    setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
 
   const openItem = (item: KuakeFile) => {
     if (item.dir) void load(pathOf(item), { pushHistory: true });
@@ -249,6 +271,29 @@ export function FilesView({
         <span className="ml-auto truncate font-mono">{dir.path}</span>
       </div>
 
+      {selected.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-1.5 border-b bg-accent/30 px-4 py-2">
+          <span className="text-xs font-medium">已选 {selected.length} 项</span>
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setDialog({ kind: "batch-move" })}>
+            <Scissors className="size-4" /> 批量移动
+          </Button>
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setDialog({ kind: "batch-copy" })}>
+            <Copy className="size-4" /> 批量复制
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 text-destructive hover:text-destructive"
+            onClick={() => setConfirmBatchDelete(true)}
+          >
+            <Trash2 className="size-4" /> 批量删除
+          </Button>
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setSelected([])}>
+            清空选择
+          </Button>
+        </div>
+      ) : null}
+
       <ScrollArea className="min-h-0 flex-1">
         {dir.error ? (
           <div className="m-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
@@ -275,6 +320,9 @@ export function FilesView({
           <table className="w-full border-collapse text-sm">
             <thead className="sticky top-0 z-10 bg-background/95 backdrop-blur">
               <tr className="border-b text-left text-[11.5px] text-muted-foreground">
+                <th className="w-10 px-2 py-2">
+                  <Checkbox checked={allChecked} onCheckedChange={() => toggleAll()} aria-label="全选本页" />
+                </th>
                 <th
                   className="cursor-pointer px-4 py-2 font-medium"
                   onClick={() =>
@@ -305,12 +353,24 @@ export function FilesView({
             <tbody>
               {sorted.map((item) => {
                 const itemPath = pathOf(item);
+                const id = idOf(item);
+                const checked = selected.includes(id);
                 return (
                   <tr
                     key={item.fid || itemPath}
-                    className="group border-b border-border/50 transition-colors hover:bg-accent/50"
+                    className={cn(
+                      "group border-b border-border/50 transition-colors hover:bg-accent/50",
+                      checked && "bg-accent/30",
+                    )}
                     onDoubleClick={() => openItem(item)}
                   >
+                    <td className="w-10 px-2 py-2">
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={() => toggleOne(id)}
+                        aria-label={"选择 " + item.file_name}
+                      />
+                    </td>
                     <td className="max-w-0 px-4 py-2">
                       <button className="flex w-full min-w-0 items-center gap-2 text-left" onClick={() => openItem(item)}>
                         {fileIcon(item.file_name, item.dir)}
@@ -523,6 +583,70 @@ export function FilesView({
             toast.error(e instanceof Error ? e.message : String(e));
           }
           setConfirmDelete(null);
+        }}
+      />
+
+      <CommandDialog
+        open={dialog.kind === "batch-move"}
+        onOpenChange={(o) => !o && close()}
+        title="批量移动到…"
+        description={"将已选 " + selected.length + " 项移动到目标目录（须已存在）"}
+        cmd="batch-move"
+        args={argsOf("batch-move")}
+        preset={{ paths: selectedPaths, dest: dir.path }}
+        hide={["paths"]}
+        submitLabel="批量移动"
+        onSuccess={() => {
+          setSelected([]);
+          void load(dir.path);
+        }}
+      />
+
+      <CommandDialog
+        open={dialog.kind === "batch-copy"}
+        onOpenChange={(o) => !o && close()}
+        title="批量复制到…"
+        description={"将已选 " + selected.length + " 项复制到目标目录（须已存在）"}
+        cmd="batch-copy"
+        args={argsOf("batch-copy")}
+        preset={{ paths: selectedPaths, dest: dir.path }}
+        hide={["paths"]}
+        submitLabel="批量复制"
+        onSuccess={() => {
+          setSelected([]);
+          void load(dir.path);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmBatchDelete}
+        onOpenChange={(o) => !o && setConfirmBatchDelete(false)}
+        title="确认批量删除？"
+        description={
+          <>
+            <span>共 {selected.length} 项：</span>
+            <ul className="mt-1 max-h-32 overflow-auto font-mono text-xs">
+              {selectedPaths.slice(0, 8).map((p) => (
+                <li key={p} className="break-all">{p}</li>
+              ))}
+              {selectedPaths.length > 8 ? <li>… 还有 {selectedPaths.length - 8} 项</li> : null}
+            </ul>
+            <br />
+            会一次性全部放进回收站，目录会连同内容一起删除。
+          </>
+        }
+        confirmLabel="批量删除"
+        onConfirm={async () => {
+          const paths = selectedPaths;
+          if (paths.length === 0) return;
+          try {
+            await run("batch-delete", { paths }, "批量删除");
+            toast.success("已删除 " + paths.length + " 项");
+            setSelected([]);
+            await load(dir.path);
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : String(e));
+          }
         }}
       />
     </div>

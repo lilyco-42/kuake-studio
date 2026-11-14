@@ -166,7 +166,7 @@ mod tests {
     fn schemas_exposes_all_commands() {
         let s = unsafe { take(kuake_studio_schemas()) };
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
-        assert_eq!(v.as_array().unwrap().len(), 22);
+        assert_eq!(v.as_array().unwrap().len(), 25);
     }
 
     #[test]

@@ -39,6 +39,27 @@ fn base(cmd: &str) -> Vec<String> {
     vec![cmd.to_string()]
 }
 
+/// 批量 argv 约定：batch-delete = [cmd, path...]，
+/// batch-move / batch-copy = [cmd, dest, path...]（dest 放 argv[1] 消歧）。
+fn batch_delete_argv(paths: Vec<String>) -> Vec<String> {
+    ["batch-delete".to_string()]
+        .into_iter()
+        .chain(paths)
+        .collect()
+}
+
+fn batch_move_argv(cmd: &str, dest: &str, paths: Vec<String>) -> Vec<String> {
+    let d = if dest.trim().is_empty() {
+        "/"
+    } else {
+        dest.trim()
+    };
+    [cmd.to_string(), d.to_string()]
+        .into_iter()
+        .chain(paths)
+        .collect()
+}
+
 // ── 只读（T0） ─────────────────────────────────────────────
 
 /// 账号信息与容量
@@ -499,6 +520,79 @@ pub struct Delete {
 fn run_delete(app: &Delete, ctx: &Context) -> Result<serde_json::Value, AppError> {
     let t = start();
     let v = kuake::run(ctx, &["delete".to_string(), app.path.clone()])?;
+    finish(ctx, t, v)
+}
+
+/// 批量删除（一次请求、一个 task_id，选中项全部进回收站）
+#[derive(Debug, App)]
+#[app(
+    name = "batch-delete",
+    about = "批量删除文件或目录（可多个路径）",
+    run = "run_batch_delete",
+    safety = "t1"
+)]
+pub struct BatchDelete {
+    #[arg(about = "要删除的网盘路径，可多个")]
+    pub paths: Vec<String>,
+}
+
+fn run_batch_delete(app: &BatchDelete, ctx: &Context) -> Result<serde_json::Value, AppError> {
+    let t = start();
+    let paths = clean_ids(&app.paths);
+    if paths.is_empty() {
+        return Err(AppError::InvalidArg("至少给一个路径".into()));
+    }
+    let v = kuake::run(ctx, &batch_delete_argv(paths))?;
+    finish(ctx, t, v)
+}
+
+/// 批量移动
+#[derive(Debug, App)]
+#[app(
+    name = "batch-move",
+    about = "批量移动文件或目录到目标目录（可多个路径）",
+    run = "run_batch_move",
+    safety = "t1"
+)]
+pub struct BatchMove {
+    #[arg(about = "要移动的网盘路径，可多个")]
+    pub paths: Vec<String>,
+    #[arg(about = "目标目录（须已存在）", default = "/")]
+    pub dest: String,
+}
+
+fn run_batch_move(app: &BatchMove, ctx: &Context) -> Result<serde_json::Value, AppError> {
+    let t = start();
+    let paths = clean_ids(&app.paths);
+    if paths.is_empty() {
+        return Err(AppError::InvalidArg("至少给一个路径".into()));
+    }
+    let v = kuake::run(ctx, &batch_move_argv("batch-move", &app.dest, paths))?;
+    finish(ctx, t, v)
+}
+
+/// 批量复制
+#[derive(Debug, App)]
+#[app(
+    name = "batch-copy",
+    about = "批量复制文件或目录到目标目录（可多个路径）",
+    run = "run_batch_copy",
+    safety = "t1"
+)]
+pub struct BatchCopy {
+    #[arg(about = "要复制的网盘路径，可多个")]
+    pub paths: Vec<String>,
+    #[arg(about = "目标目录（须已存在）", default = "/")]
+    pub dest: String,
+}
+
+fn run_batch_copy(app: &BatchCopy, ctx: &Context) -> Result<serde_json::Value, AppError> {
+    let t = start();
+    let paths = clean_ids(&app.paths);
+    if paths.is_empty() {
+        return Err(AppError::InvalidArg("至少给一个路径".into()));
+    }
+    let v = kuake::run(ctx, &batch_move_argv("batch-copy", &app.dest, paths))?;
     finish(ctx, t, v)
 }
 
@@ -1006,6 +1100,9 @@ pub fn commands() -> Vec<lilyco::__core::registry::RegisteredCommand> {
         RegisteredCommand::from_app::<EncryptLocal>(),
         RegisteredCommand::from_app::<DecryptLocal>(),
         RegisteredCommand::from_app::<Login>(),
+        RegisteredCommand::from_app::<BatchDelete>(),
+        RegisteredCommand::from_app::<BatchMove>(),
+        RegisteredCommand::from_app::<BatchCopy>(),
     ]
 }
 
@@ -1091,6 +1188,47 @@ mod tests {
             "b".to_string(),
         ]);
         assert_eq!(got, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn batch_argv_helpers_keep_dest_slot_and_clean_paths() {
+        let paths = vec![" /a ".to_string(), String::new(), "/b".to_string()];
+        let clean = clean_ids(&paths);
+        assert_eq!(clean, vec!["/a".to_string(), "/b".to_string()]);
+        assert_eq!(
+            batch_delete_argv(clean.clone()),
+            vec!["batch-delete", "/a", "/b"]
+        );
+        assert_eq!(
+            batch_move_argv("batch-move", "", clean.clone()),
+            vec!["batch-move", "/", "/a", "/b"]
+        );
+        assert_eq!(
+            batch_move_argv("batch-copy", " /x ", clean),
+            vec!["batch-copy", "/x", "/a", "/b"]
+        );
+    }
+
+    #[test]
+    fn batch_schemas_expose_list_arg_and_are_confirmed_writes() {
+        use lilyco::__core::schema::ArgKind;
+        for (name, nargs) in [("batch-delete", 1), ("batch-move", 2), ("batch-copy", 2)] {
+            let schema = commands()
+                .into_iter()
+                .find(|c| c.schema.name == name)
+                .expect("批量命令必须注册")
+                .schema;
+            assert_eq!(schema.args.len(), nargs, "{name}");
+            assert_eq!(schema.args[0].name, "paths", "{name}");
+            assert!(
+                matches!(schema.args[0].kind, ArgKind::List { .. }),
+                "{name}"
+            );
+            assert!(
+                !matches!(schema.safety, lilyco::__core::safety::SafetyTier::ReadOnly),
+                "{name}"
+            );
+        }
     }
 
     #[test]

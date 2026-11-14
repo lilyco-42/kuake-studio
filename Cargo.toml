@@ -1,6 +1,6 @@
 [package]
 name = "kuake-studio"
-version = "0.5.5"
+version = "0.5.6"
 edition = "2021"
 description = "Quark 网盘客户端 —— lilyco 框架（Registry/App/Safety）+ shadcn/ui 前端；桌面安装包 + 移动/鸿蒙进程内原生库"
 license = "MIT OR Apache-2.0"
