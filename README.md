@@ -641,6 +641,27 @@ v0.5.4 的发布包也复验过同一件事：直接从 Release 下载的 `kuake
 - `.env` 就位 → 冷启动跑 `user` → `nickname=lilyco42`
 - 把 `.env` 移走再冷启动 → `user` → 「未找到夸克登录凭据」（预期失败面，证明确实是读文件生效，不是残留状态）
 
+## 实测记录：真机 arm64 跑 v0.5.6 发布字节
+
+这轮不是模拟器：设备是 OnePlus PJD110（`ro.product.cpu.abi=arm64-v8a`、Android 16 / SDK 36），
+跑的是 **v0.5.6 Release APK 里的 `.so`**——从 `tools/verify-release.mjs` 匿名下载的成品包解出
+arm64 / x86_64 两套 so，原样塞回构建目录再打可调试包（`KUAKE_STUDIO_APK_DEBUGGABLE=1`，
+6562895 B，与发布包同尺寸），保证设备上跑的是发布产物里的字节而不是本地重编结果。
+
+| 项目 | 结果 |
+| --- | --- |
+| ABI 生效 | `dumpsys package` → `primaryCpuAbi=arm64-v8a`；`/proc/<pid>/maps` 加载 `.../lib/arm64/libkuake_studio_jni.so` |
+| 冷启动 | `adb install -r -t` → Success，`monkey` 拉起后 `/proc/net/tcp` 里 127.0.0.1:8787 LISTEN |
+| HTTP/SSE | `adb forward tcp:8796 tcp:8787` → `/api/boot` `version=0.5.6`、`backend=native`；`version` / `user`(lilyco42) / `list`(25 项) / `search`(18 项) / `share-list`(50) / `recycle-list`(1) 全 `success` |
+| 批量命令 | `/api/schema` 25 条含 `batch-delete` / `batch-move` / `batch-copy`；三条喂不存在的路径都在发写请求前中止「找不到路径」 |
+| WebView UI | CDP `Runtime.evaluate`：页头「25 个命令」、26 个 checkbox（25 行 + 全选）、表头 `["","名称","大小","修改时间",""]`、点全选出现「已选 25 项」、按钮「批量移动 / 批量复制 / 批量删除 / 清空选择」、清空后 0 个 checked |
+| 渲染 | 截图 1080×2376，暗色像素 96.82%、亮色 0.83%，确认暗色 shadcn 控制台真渲染 |
+| 清场 | `am force-stop` + `uninstall` → `pm list` GONE（含 cookie 的 `.env` 一并删掉）、`forward --remove-all`、本地 `.so` 还原到备份 sha256 |
+
+坑：`adb forward tcp:9230` 撞上已占用的 devtools 端点，拿到的 `/json/list` 是 Chrome 浏览器页
+（`about:blank` / `chrome://…`）而不是 App WebView。改用 `net.createServer` 探到确定空闲的
+主机端口（9400）再转发，DOM 断言才全绿。凭据只通过 `run-as` 写进 App 私有目录，验完立刻卸载清除。
+
 ## 实测记录：回收站端到端（v0.5.5）
 
 在真实账号上用 8787 的 HTTP/SSE 通道跑完一整轮（每条命令都只有 1 个终态事件）：
