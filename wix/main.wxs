@@ -30,6 +30,7 @@
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLFOLDER" Name="kuake-studio" />
       </Directory>
+      <Directory Id="DesktopFolder" />
       <Directory Id="ProgramMenuFolder">
         <Directory Id="AppMenuFolder" Name="kuake-studio" />
       </Directory>
@@ -47,6 +48,12 @@
                        KeyPath="yes" />
         <Shortcut Id="StartMenuShortcut"
                   Directory="AppMenuFolder"
+                  Name="kuake-studio"
+                  Description="Quark Drive client"
+                  Target="[INSTALLFOLDER]kuake-studio.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <Shortcut Id="DesktopShortcut"
+                  Directory="DesktopFolder"
                   Name="kuake-studio"
                   Description="Quark Drive client"
                   Target="[INSTALLFOLDER]kuake-studio.exe"

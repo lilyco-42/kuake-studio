@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 验证 kuake-studio 的 GitHub Release：资产齐全 / SHA256 / 匿名可下载 / 解包结构 /
 // BUILD_INFO / 逐 .o 架构 / 6 个 C ABI 符号 / macOS universal / Windows PE / Info.plist。
-// 用法: node tools/verify-release.mjs [--tag v0.5.2] [--dir DIR] [--no-download] [--json]
+// 用法: node tools/verify-release.mjs [--tag v0.5.3] [--dir DIR] [--no-download] [--json]
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -103,7 +103,9 @@ for (const p of PLATFORMS) {
   byPlatform[p.key] = hits;
   ck('资产齐全 ' + p.key, hits.length === p.want, hits.length + '/' + p.want + '  ' + hits.map((a) => a.name).join(', '));
 }
-ck('资产总数', assets.length === 7, String(assets.length) + ' 个（期望 7）');
+const apkAssets = assets.filter((a) => /-android\.apk$/.test(a.name));
+ck('资产齐全 android-apk', apkAssets.length === 1, apkAssets.length + '/1  ' + apkAssets.map((a) => a.name).join(', '));
+ck('资产总数', assets.length === 8, String(assets.length) + ' 个（期望 8）');
 
 // ── 匿名可下载 ──────────────────────────────────────────────────────────
 const first = assets[0];
@@ -147,6 +149,11 @@ for (const p of PLATFORMS) {
     if (p.kind === 'desktop') {
       const html = find(files, (f) => /(^|\/)dist\/index\.html$/.test(f.rel));
       ck('前端 dist ' + p.key, !!html, html ? 'dist/index.html 存在' : '缺失');
+      if (p.key === 'linux-x64') {
+        const ins = find(files, (f) => f.base === 'install.sh');
+        ck('Linux 一键安装器 install.sh', !!ins, ins ? '存在' : '缺失');
+        ck('Linux install.sh 可执行', !!ins && (fs.statSync(ins).mode & 0o111) !== 0, ins ? 'mode ' + (fs.statSync(ins).mode & 0o777).toString(8) : '缺失');
+      }
       if (p.key === 'windows-x64') {
         const exe = find(files, (f) => f.base.endsWith('.exe'));
         ck('Windows 可执行文件', !!exe && /PE32\+/.test(run('file', [exe]).out), exe ? run('file', [exe]).out.trim().slice(0, 90) : '缺失');
@@ -207,6 +214,54 @@ for (const p of PLATFORMS) {
     }
   }
 }
+// ── Android APK：可安装性结构（双 ABI / 前端 / dex / Manifest）─────────────
+for (const a of apkAssets) {
+  const file = path.join(dir, a.name);
+  if (!fs.existsSync(file)) { ck('APK 存在 ' + a.name, false, '文件缺失'); continue; }
+  const size = fs.statSync(file).size;
+  ck('APK 存在 ' + a.name, true, size + ' B');
+  const l = run('unzip', ['-l', file]);
+  const list = l.out;
+  ck('APK 解包 ' + a.name, l.status === 0, l.status === 0 ? 'OK' : (l.err || '').trim().slice(0, 160));
+  if (l.status !== 0) continue;
+  for (const [label, re] of [
+    ['AndroidManifest.xml', /\sAndroidManifest\.xml$/m],
+    ['classes.dex', /\sclasses\.dex$/m],
+    ['assets/dist.zip（内置前端）', /\sassets\/dist\.zip$/m],
+  ]) ck('APK 含 ' + label, re.test(list), '');
+
+  const abis = [...list.matchAll(/\slib\/([^/]+)\/libkuake_studio_jni\.so$/gm)].map((m) => m[1]).sort();
+  ck('APK 双 ABI（arm64-v8a + x86_64）',
+     abis.includes('arm64-v8a') && abis.includes('x86_64'),
+     abis.length ? abis.join(' + ') : '未找到任何 lib/<abi>/libkuake_studio_jni.so');
+  // .so 必须未压缩存放（APK 安装后 extractNativeLibs 才能直接映射）
+  const vz = run('unzip', ['-v', file]);
+  const soStored = // 只要能看到任一 so 行是 Stored 即可（更严格：全部）
+    /libkuake_studio_jni\.so[\s\S]{0,200}Stored/.test(vz.out);
+  ck('APK 内 .so 未压缩存放', soStored, soStored ? 'Stored' : 'Defl:N（安装仍可用但建议 -0 存放）');
+
+  // 有 apksigner 就验签；没有就只提示（CI 里有 SDK，开发机可能没有）。
+  // 先看 PATH，再回退到 ANDROID_SDK_ROOT / ~/Android/Sdk 的 build-tools。
+  let signer = 'apksigner';
+  if (run('sh', ['-c', 'command -v apksigner']).status !== 0) {
+    const sdk = process.env.ANDROID_SDK_ROOT || process.env.ANDROID_HOME
+      || path.join(home, 'Android', 'Sdk');
+    const bt = run('sh', ['-c', 'ls -d ' + sdk + '/build-tools/*/ 2>/dev/null | sort -V | tail -1']).out.trim();
+    if (bt && fs.existsSync(path.join(bt, 'apksigner'))) signer = path.join(bt, 'apksigner');
+  }
+  const hasSigner = fs.existsSync(signer) || run('sh', ['-c', 'command -v ' + signer]).status === 0;
+  if (hasSigner) {
+    // cwd 必须是纯 ASCII：apksigner 是 JVM 程序，会把 cwd 当 user.dir 去 encode，
+    // 在中文目录（如 ~/文档/...）下会抛 InvalidPathException 而报假失败。
+    const v = run(signer, ['verify', '--verbose', '--min-sdk-version', '24', file], { cwd: dir });
+    const okSig = v.status === 0 && /Verifies/.test(v.out);
+    const schemes = (v.out.match(/Verified using v(\d(?:\.\d)?) scheme[^:]*: (true|false)/g) || []).join(' ');
+    ck('APK 签名可验证 apksigner', okSig, okSig ? (schemes || 'Verifies').slice(0, 160) : (v.err || v.out).trim().slice(0, 160));
+  } else {
+    ck('APK 签名可验证 apksigner（本机无 SDK，跳过）', true, '未安装 apksigner，仅跳过不解包签名块');
+  }
+}
+
 finish();
 
 function finish() {

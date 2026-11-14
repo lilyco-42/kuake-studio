@@ -21,6 +21,14 @@ kuake-cli-json*.json
 /pkg/
 /wix/*.wxs.bak
 
+# Android 宿主工程（本机 / CI 产物都不入库）
+/android/target/
+/android/build/
+/android/app/debug.keystore
+*.apk
+*.apk.idsig
+*.aab
+
 # 编辑器 / 系统
 .DS_Store
 .idea/

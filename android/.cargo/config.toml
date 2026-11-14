@@ -1,0 +1,15 @@
+# 交叉编译 Android 时的 linker / ar。
+# android/tools/build-jni.sh 会把 NDK 的 toolchains/llvm/prebuilt/<host>/bin 放进 PATH，
+# 这里只写裸命令名：本机与 GitHub Actions 通用，绝不把 /home/... 绝对路径写死进仓库。
+
+[target.aarch64-linux-android]
+linker = "aarch64-linux-android24-clang"
+ar = "llvm-ar"
+
+[target.armv7-linux-androideabi]
+linker = "armv7a-linux-androideabi24-clang"
+ar = "llvm-ar"
+
+[target.x86_64-linux-android]
+linker = "x86_64-linux-android24-clang"
+ar = "llvm-ar"

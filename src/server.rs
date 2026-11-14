@@ -76,22 +76,31 @@ async fn run_progress(
         .insert(sid.to_string(), Arc::clone(&task.cancel));
     // for event in task.rx 是阻塞收（crossbeam），占一个 worker 线程
     // —— 与 lilyco-gui 同一条约束：只能在多线程 runtime 上跑
+    let mut saw_terminal = false;
+    let mut sent_ok = true;
     for event in task.rx {
+        let terminal = matches!(event, Progress::Done { .. } | Progress::Error { .. });
         let json = serde_json::to_value(&event).unwrap_or(serde_json::Value::Null);
         if gui_tx.send(json).await.is_err() {
+            sent_ok = false;
             break;
         }
-        if matches!(event, Progress::Done { .. } | Progress::Error { .. }) {
+        if terminal {
+            saw_terminal = true;
             break;
         }
     }
     state.cancels.lock().await.remove(sid);
+    // 兜底合成终态：仅当事件流里**没有**出现过 Done/Error 时才补发。
+    // 此前无条件补发，导致每条失败命令都推两条一模一样的 error（前端收两次）。
     if let Ok(Err(e)) = task.handle.join() {
-        let _ = gui_tx
-            .send(serde_json::json!({
-                "type": "error", "code": 1, "message": e.to_string(), "kind": null
-            }))
-            .await;
+        if sent_ok && !saw_terminal {
+            let _ = gui_tx
+                .send(serde_json::json!({
+                    "type": "error", "code": 1, "message": e.to_string(), "kind": null
+                }))
+                .await;
+        }
     }
 }
 

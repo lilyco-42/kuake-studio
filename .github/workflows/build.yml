@@ -272,6 +272,7 @@ jobs:
           cp target/release/kuake-studio "$stage/"
           cp README.md "$stage/"
           cp assets/kuake-studio.desktop assets/kuake-studio-1024.png "$stage/"
+          cp tools/install-linux-desktop.sh "$stage/install.sh"
           cp -r frontend/dist "$stage/dist"
           # 便携版启动器：不能用仓库里的 run.sh（它写死了本机共享 target 路径）
           cat > "$stage/start.sh" <<'EOS'
@@ -280,7 +281,7 @@ jobs:
           cd "$(dirname "$0")" || exit 1
           exec ./kuake-studio "$@"
           EOS
-          chmod +x "$stage/start.sh" "$stage/kuake-studio"
+          chmod +x "$stage/start.sh" "$stage/kuake-studio" "$stage/install.sh"
           tar -C pkg -czf "pkg/kuake-studio-$ver-linux-x64.tar.gz" "kuake-studio-$ver-linux-x64"
           ls -l pkg/
 
@@ -513,10 +514,92 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # ── Android APK：可直接安装的 App（不需要 Android Studio / Gradle）────
+  # 用 aapt2 + javac + d8 + zipalign + apksigner 纯命令行打包，
+  # 与 package 里的 android-arm64 静态库包并存：那个给宿主 App 链接，
+  # 这个给普通用户双击图标即用（arm64 真机 + x86_64 模拟器同一份 APK）。
+  android-apk:
+    name: android-apk
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-apk
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+
+      - name: 前端依赖切到官方源
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            for (const f of ["frontend/bun.lock", "frontend/bunfig.toml"]) {
+              if (!fs.existsSync(f)) continue;
+              fs.writeFileSync(f, fs.readFileSync(f, "utf8")
+                .replaceAll("https://registry.npmmirror.com/", "https://registry.npmjs.org/"));
+            }
+          '
+
+      - name: 构建前端
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun run build
+
+      - name: 环境自检（NDK / build-tools / JDK）
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+          ls -d "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"/ndk/*/ || true
+          ls -d "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"/build-tools/*/ || true
+          java -version
+
+      - name: 交叉编译 JNI 库（arm64 + x86_64）
+        shell: bash
+        run: ./android/tools/build-jni.sh aarch64-linux-android x86_64-linux-android
+
+      - name: 打包签名 APK
+        shell: bash
+        run: ./android/tools/build-apk.sh
+
+      - name: 自检（APK 结构 / 签名 / 双 ABI）
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=$(ls -1 pkg/*.apk | head -1)
+          test -s "$apk"
+          BT=$(ls -d "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"/build-tools/*/ | sort -V | tail -1)
+          "$BT/aapt" dump badging "$apk" | grep -E "package:|sdkVersion|targetSdkVersion|application-label|native-code"
+          "$BT/apksigner" verify --verbose --min-sdk-version 24 "$apk"
+          unzip -l "$apk" | grep -E "AndroidManifest.xml|classes.dex|assets/dist.zip|lib/.*libkuake_studio_jni.so"
+          # 两个 ABI 缺一不可（arm64 真机 + x86_64 模拟器）
+          abis=$(unzip -l "$apk" | grep -c "lib/.*libkuake_studio_jni.so")
+          echo "ABI 数量: $abis"
+          test "$abis" -ge 2
+          ls -l pkg/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: pkg/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
   # ── 打标签时发布到 Releases ──────────────────────────────────────────
   release:
     name: release
-    needs: package
+    needs: [package, android-apk]
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
     runs-on: ubuntu-latest
     steps:
@@ -542,15 +625,19 @@ jobs:
             echo
             printf '%s\n' \
               '- Windows：`kuake-studio-*-windows-x64.zip`（解压即用）/ `*.msi`（安装包）' \
-              '- Linux：`kuake-studio-*-linux-x64.tar.gz`（解压后 `./start.sh`）' \
+              '- Linux：`kuake-studio-*-linux-x64.tar.gz` 解压后运行一次 `./install.sh`（桌面图标 + 开机自启，双击即用）' \
               '- macOS：`kuake-studio-*-macos-universal.tar.gz` 或解压出的 `kuake-studio.app`（未签名，首次打开需右键 → 打开）' \
+            '- Android：`kuake-studio-*-android.apk` 直接装（arm64 真机 + x86_64 模拟器同一份，debug 签名）' \
+              '三个桌面平台启动后都会自动打开浏览器，用户无需知道 IP / 端口（服务只监听 127.0.0.1:8787）。' \
               '' \
               '首次运行在「账号」页点「扫码登录」用夸克 App 扫一下即可；也可设置 `KUAKE_COOKIE` 或写进 `~/.config/kuake/.env`。' \
               '默认走内置原生夸克 API，无需安装 kuake CLI；设 KUAKE_STUDIO_BACKEND=cli 才回退到子进程。'
           } > release-notes.md
           cat >> release-notes.md <<'NOTES'
 
-          - Android：kuake-studio-*-android-arm64.tar.gz（aarch64 静态库 + C 头 + ABI 自检源码）
+          - Android（想直接装上用）：kuake-studio-*-android.apk —— 双击安装即可，App 内置前端与进程内服务。
+  arm64 真机与 x86_64 模拟器同一份 APK；debug 自签名，首次安装需允许「安装未知来源应用」。
+- Android（想做宿主 App）：kuake-studio-*-android-arm64.tar.gz（aarch64 静态库 + C 头 + ABI 自检源码）
           - iOS：kuake-studio-*-ios-arm64.tar.gz（arm64 静态库 + C 头 + ABI 自检源码）
           - 鸿蒙 / OpenHarmony：kuake-studio-*-ohos-arm64.tar.gz（aarch64 静态库 + C 头 + ABI 自检源码）
 

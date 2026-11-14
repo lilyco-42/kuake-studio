@@ -1,13 +1,14 @@
 # Kuake Studio
 
-夸克网盘客户端（Windows / Linux / macOS 桌面安装包 + Android / iOS / 鸿蒙进程内原生库）。
+夸克网盘客户端（Windows / Linux / macOS 桌面安装包 + **Android 可安装 APK** + iOS / 鸿蒙进程内原生库）。
 **Rust 后端用 [lilyco](https://github.com/lilyco-42/lilyco) 框架**（一个 `App`/`Registry`
 派生同时驱动 CLI / Web / MCP 三端），**前端用 shadcn/ui**（radix-ui + Tailwind 4 + cva + lucide + sonner），
 网盘操作默认走**内置自研夸克 API**（`src/quark.rs`，reqwest 直连官方 HTTP 接口）；
 设 `KUAKE_STUDIO_BACKEND=cli` 才回退到本机 `kuake` CLI 子进程。
 
-Windows / Linux / macOS 发**可直接安装的桌面包**（自带 axum + 浏览器）；
-Android / iOS / 鸿蒙发**进程内 FFI 静态库**（宿主 App 自己链原生层 + WebView 渲染同一份 `dist/`）。
+四个消费端平台发**可直接安装的包**：Windows / Linux / macOS 是桌面包（自带 axum + 浏览器），
+Android 是 **APK**（WebView 宿主 + 进程内 axum，双击图标即用）；
+iOS / 鸿蒙发**进程内 FFI 静态库**（宿主 App 自己链原生层 + WebView 渲染同一份 `dist/`）。
 不发假 App、不假称商店上架，详见 [六平台支持矩阵](#六平台支持矩阵)。
 
 ![文件](screenshot-files.png)
@@ -22,12 +23,38 @@ Android / iOS / 鸿蒙发**进程内 FFI 静态库**（宿主 App 自己链原�
 | --- | --- | --- |
 | Windows | `*-windows-x64.msi` | 双击安装，开始菜单里点 kuake-studio；卸载前先退出 exe |
 | Windows | `*-windows-x64.zip` | 解压后双击 `run.bat`（便携，不写注册表） |
-| Linux | `*-linux-x64.tar.gz` | 解压后 `./start.sh`，或把 `kuake-studio` + `dist/` 一起放任意目录 |
+| Linux | `*-linux-x64.tar.gz` | 解压后在目录里运行一次 `./install.sh`（装桌面图标 + 开机自启）；或 `./start.sh` 便携启动 |
 | macOS | `*-macos-universal.tar.gz` | 解压后双击 `kuake-studio.app`（未签名，首次打开需右键 → 打开），或 `./kuake-studio` |
+| Android | `*-android.apk` | 传到手机点安装（首次需允许「安装未知来源应用」），装完点图标即用 |
 
 三种包都自带 `dist/`（前端产物放在 exe 同级），启动后自动开浏览器到
 `http://127.0.0.1:8787`。**默认不再需要安装 `kuake.exe` / `kuake` CLI**：内置原生后端
 首次在「账号」页点「**扫码登录**」用夸克 App 扫一下即可，无需手抄 cookie；仅当显式设 `KUAKE_STUDIO_BACKEND=cli` 时才需要本机 CLI。
+
+### 小白：全程不用碰 IP / 端口
+
+三个桌面平台都是**双击图标 → 程序自动开浏览器**，用户永远不用在地址栏输入
+`127.0.0.1` 或 `8787`（端口由程序内部监听，URL 一眼都不用看）：
+
+| 平台 | 第一次 | 以后每次 | 卸载 |
+| --- | --- | --- | --- |
+| Windows | 双击 `*.msi` 安装（或解压 `.zip` 双击 `run.bat`） | 点桌面 / 开始菜单的「kuake-studio」 | 设置 → 应用 → 卸载 |
+| macOS | 解压 `*.tar.gz`，首次对 `kuake-studio.app` 右键 → 打开（未签名，仅此一次） | 双击 `kuake-studio.app` | 把 .app 拖进废纸篓 |
+| Linux | 在解压目录里运行一次 `./install.sh` | 双击桌面的「夸克网盘」 | `./install.sh --uninstall` |
+| Android | 把 `*.apk` 传到手机点开安装（允许「未知来源」） | 点桌面的「夸克网盘」图标 | 长按图标 → 卸载 |
+
+Linux 的 `./install.sh` 把程序装到 `~/.local/opt/kuake-studio`、注册一个
+`systemd --user` 后台服务（开机自启、崩溃自动重启）、生成桌面图标与应用菜单项；
+`open.sh` 会在服务没起时先拉起再开浏览器。服务只监听 `127.0.0.1:8787`，局域网内
+其他机器访问不到；卸载脚本只删程序与入口，不动凭据和已下载的文件。
+
+> **Android 现在是一份真 APK**（`android/` 独立宿主工程）：`*-android.apk` 里是
+> WebView 宿主 + `libkuake_studio_jni.so`（JNI 调同一份 C ABI）+ 内置 `dist.zip`，
+> 启动即在 App 进程内起 127.0.0.1 的 axum，界面与桌面包完全一致；arm64 真机与 x86_64
+> 模拟器**同一份包**（两套 `.so` 都在 `lib/` 下）。它用 aapt2 + javac + d8 + zipalign +
+> apksigner **纯命令行打包**，不需要 Android Studio / Gradle，CI 里直接出包。
+> 仍是 debug 自签名、不上应用商店，首次安装需允许「安装未知来源应用」。
+> iOS / 鸿蒙还是只发静态库（受签名 / 公证限制更重）。
 
 ### 六平台支持矩阵
 
@@ -36,14 +63,17 @@ Android / iOS / 鸿蒙发**进程内 FFI 静态库**（宿主 App 自己链原�
 | Windows x64 | `*-windows-x64.msi` / `.zip` | 真安装包（自带 dist，自动开浏览器） | 客户端 axum + 系统浏览器 |
 | Linux x64 | `*-linux-x64.tar.gz` | 真安装包（同上） | 同上 |
 | macOS universal | `*-macos-universal.tar.gz` / `.app` | 真安装包（arm64 + x86_64 lipo，未签名） | 同上 |
-| Android arm64 | `*-android-arm64.tar.gz` | `libkuake_studio.a` + C 头 + ABI 自检源码 | **宿主 App**：JNI + WebView |
+| Android | `*-android.apk` | **真安装包**：WebView 宿主 + 进程内 axum + 内置 `dist.zip` | 客户端 axum + App 内 WebView |
+| Android arm64（给宿主 App 链） | `*-android-arm64.tar.gz` | `libkuake_studio.a` + C 头 + ABI 自检源码 | **宿主 App**：JNI + WebView |
 | iOS arm64 | `*-ios-arm64.tar.gz` | 同上 | **宿主 App**：Swift + WKWebView |
 | 鸿蒙 / OpenHarmony arm64 | `*-ohos-arm64.tar.gz` | 同上 | **宿主 App**：NAPI + WebView |
 
-移动 / 鸿蒙这三个包**不是可安装的 App**，没有应用商店签名。桌面架构是「本机 axum 服务 +
-外部浏览器」，Android / iOS / 鸿蒙跑不了这个二进制；所以三平台改成**进程内 FFI 原生库**：
-同一套 lilyco Registry / 19 条命令 / 前端 `dist/` 全部复用，只是不启 HTTP、不开浏览器、
-不生成一次性令牌，宿主在进程内直接调 C ABI。
+桌面架构是「本机 axum 服务 + 外部浏览器」；Android 复用了同一套后端，但把 axum 跑在
+**App 进程内**（`127.0.0.1`），UI 交给 WebView，所以用户看到的是同一个界面、同一套命令。
+
+iOS / 鸿蒙以及 `*-android-arm64.tar.gz` 这三个是**进程内 FFI 原生库**，不是可安装的 App、
+没有应用商店签名：同一套 lilyco Registry / 19 条命令 / 前端 `dist/` 全部复用，只是不启 HTTP、
+不开浏览器、不生成一次性令牌，宿主在进程内直接调 C ABI。
 
 宿主接法（`include/kuake_studio.h`，6 个函数，全部 UTF-8 / NULL 安全）：
 
@@ -86,7 +116,8 @@ cd .. && ./run.sh                  # 开发时用本机共享 target
 本机（开发机）的 `run.sh` 指向共享编译缓存 `~/.cache/lilyco-build/target`，
 普通用户请使用上面打包版自带的启动器。
 
-移动 / 鸿蒙只编核心库（不编 axum / tokio / 浏览器入口），出 `target/<triple>/release/libkuake_studio.a`：
+iOS / 鸿蒙（以及给宿主 App 用的 Android 静态库包）只编核心库（不编 axum / tokio / 浏览器入口），
+出 `target/<triple>/release/libkuake_studio.a`：
 
 ```bash
 rustup target add aarch64-linux-android   # 或 aarch64-apple-ios / aarch64-unknown-linux-ohos
@@ -97,6 +128,20 @@ CC_aarch64_linux_android="$PWD/tools/cc-aarch64-musl.sh" \
 ```
 
 C 头文件在 `include/kuake_studio.h`，接入方式见[六平台支持矩阵](#六平台支持矩阵)。
+
+**Android 出可安装 APK**（与上面的静态库是两条路，互不影响）：
+
+```bash
+cd frontend && bun run build && cd ..            # 1) 前端 dist
+./android/tools/build-jni.sh aarch64-linux-android x86_64-linux-android  # 2) 两套 .so
+./android/tools/build-apk.sh                     # 3) pkg/kuake-studio-<ver>-android.apk
+adb install -r pkg/kuake-studio-*-android.apk    # 4) 装到真机 / 模拟器
+```
+
+需要 `ANDROID_SDK_ROOT`（含 `ndk/`、`build-tools/`、`platforms/android-36`）与 JDK 17；
+不需要 Android Studio、不需要 Gradle。脚本会自动回退到 `~/Android/Sdk`。
+`.so` 收集是按 `android/target/<triple>/release/` 的目录名映射 ABI 的，所以想加 `armeabi-v7a`
+只要多传一个 `armv7-linux-androideabi` 给 `build-jni.sh`。
 
 ### 同一个二进制，三种用法
 
@@ -178,7 +223,8 @@ lilyco Registry (19 个 #[derive(App)] 命令, SafetyTier T0 只读 / T1 需确�
    └─ 可选 KUAKE_STUDIO_BACKEND=cli → kuake CLI 子进程（argv 数组、可取消、900s 超时）
 ```
 
-桌面走上面这条「axum + 浏览器」链路；移动 / 鸿蒙走进程内 FFI（见[六平台支持矩阵](#六平台支持矩阵)）：
+桌面走上面这条「axum + 浏览器」链路；Android 走「进程内 axum + WebView」；
+iOS / 鸿蒙走进程内 FFI（见[六平台支持矩阵](#六平台支持矩阵)）：
 宿主直接调 `src/ffi.rs` 的 C ABI → `src/lib.rs` 的 `call()` → 同一个 lilyco Registry，
 跳过 axum / SSE / 一次性令牌，命令与 schema 完全一致。
 
@@ -371,7 +417,13 @@ cd ~/code/kuake-studio/tools
      GNU `ar` 只把 `.o` 打进 `.a`，跨平台打包无需专用归档器；修后逐个 `.o` 复验仍全是 arm64。
    - **ios-arm64**：macos runner 的 Xcode / `xcrun --sdk iphoneos` 提供 iPhoneOS SDK。
    - `rustup target add` 对应 Rust 官方 target（`aarch64-linux-android` / `aarch64-apple-ios` / `aarch64-unknown-linux-ohos`）。
-3. `release`：打 `v*` 标签时把**六平台产物**传到 GitHub Release。
+3. `android-apk`：出**可直接安装的 APK**（与上面 android-arm64 静态库包并存）。
+   `bun run build` 出 `dist` → `android/tools/build-jni.sh aarch64-linux-android x86_64-linux-android`
+   用 runner 自带的 NDK 交叉编两个 ABI 的 `libkuake_studio_jni.so` →
+   `android/tools/build-apk.sh` 纯命令行打包（aapt2 / javac / d8 / zipalign / apksigner，
+   不需要 Gradle），自检 `aapt dump badging` + `apksigner verify` + `unzip -l` 断言
+   两个 ABI 都在，再 `upload-artifact`。`release` 依赖 `[package, android-apk]`。
+4. `release`：打 `v*` 标签时把**七份产物**传到 GitHub Release。
 
 > 为什么不用默认宿主机 `cc` / 裸 `clang`：前者会不加 `--target` 把 ring 的 C 编成 x86-64
 > 混进归档（`cargo check` 不会发现），后者会用错 x86-64 glibc 的 `uintptr_t` 而报
@@ -380,9 +432,9 @@ cd ~/code/kuake-studio/tools
 想手动出包：Actions → build → Run workflow（填 tag 会顺带发布）。
 前端 `bun.lock` 里钉的是国内镜像，CI 里会先替换成 npmjs 官方源再 frozen 安装。
 
-## 验证已发布的 Release（六平台产物）
+## 验证已发布的 Release（8 个资产 / 六平台）
 
-`tools/verify-release.mjs` 把每次发版后的手工核对固化成一条命令：**匿名拉下 7 个资产，
+`tools/verify-release.mjs` 把每次发版后的手工核对固化成一条命令：**匿名拉下 8 个资产，
 逐项对照 GitHub 的 `sha256:` digest，解包后校验结构、架构与 ABI 符号**；
 90+ 项检查，任一失败退出码非 0。
 
@@ -391,21 +443,24 @@ cd ~/code/kuake-studio/tools
 node tools/verify-release.mjs
 
 # 指定 tag / 指定缓存目录 / 机器可读输出
-node tools/verify-release.mjs --tag v0.5.2 --json
-node tools/verify-release.mjs --tag v0.5.2 --dir /tmp/ks-verify --no-download
+node tools/verify-release.mjs --tag v0.5.3 --json
+node tools/verify-release.mjs --tag v0.5.3 --dir /tmp/ks-verify --no-download
 ```
 
-检查项：资产齐全（Windows 2 + Linux / macOS / Android / iOS / 鸿蒙各 1 = 7）、非草稿、
+检查项：资产齐全（Windows 2 + Linux / macOS / **Android APK** / Android 静态库 / iOS / 鸿蒙各 1 = 8）、非草稿、
 匿名可下载（去掉 `GH_TOKEN` 后 HEAD 返回 200）、SHA256 与 API digest 逐字节一致、
-解包结构（桌面含 `dist/index.html`，Windows exe 是 PE32+，macOS `lipo -info` 同时有
+解包结构（桌面含 `dist/index.html`、Linux 包含 `install.sh`，Windows exe 是 PE32+，macOS `lipo -info` 同时有
 x86_64 + arm64，`Info.plist` 的 `CFBundleVersion` 等于 tag 版本）、native 三包
 `BUILD_INFO.txt` 的 version / rust_target / crate_type、逐个 `.o` 的架构
 （Android / 鸿蒙全 ELF aarch64、iOS 全 Mach-O arm64），以及 6 个 `kuake_studio_*`
-导出符号。iOS 包另有一道文案护栏：`README-native.md` 不得混入 Android / 鸿蒙专用的
+导出符号。APK 另有专项：含 `AndroidManifest.xml` / `classes.dex` / `assets/dist.zip`、
+`lib/` 下同时有 `arm64-v8a` 与 `x86_64` 的 `libkuake_studio_jni.so`（且是 Stored 未压缩）、
+有 `apksigner` 时再验 v2/v3 签名（注意它跑在 ASCII cwd 下，否则中文目录会让 JVM 抛
+`InvalidPathException` 而报假失败）。iOS 包另有一道文案护栏：`README-native.md` 不得混入 Android / 鸿蒙专用的
 `zig` / `AR_aarch64_linux_android` 复现说明（v0.5.1 修）。
 
 前置：`gh` CLI 能读 Release 元数据；本机需 `curl` `file` `ar` `nm` `tar` `unzip`
-`llvm-lipo` `llvm-objdump`。这一步是**静态 + 完整性**校验；Linux 桌面包的运行态
+`llvm-lipo` `llvm-objdump`（`apksigner` 可选，装了才验签名）。这一步是**静态 + 完整性**校验；Linux 桌面包的运行态
 （`--cli` / `/api/boot` / SSE）与 Windows 包在 Wine 里的安装、启动另做实测。
 
 ## 实测记录：Windows 包在 Wine 里跑过
@@ -450,6 +505,26 @@ x86_64 + arm64，`Info.plist` 的 `CFBundleVersion` 等于 tag 版本）、nativ
 | 只读命令 | `user` → lilyco42 / SUPER_VIP / 26.0 TB；`version` → `native 0.1.0`（当时硬编码，v0.3.0 已修）；`list /` → 10 项；`info README` → 958 B |
 | 真实网盘闭环 | `create` → `upload`（300043 B）→ `download` → `cmp` 与原文**逐字节一致** → `delete` 清理；残留 0 |
 | 关键结论 | 上游 CLI 的 `403 auth expired`、`program not found` 都不再出现；Windows 包开箱即用 |
+## 实测记录：Android APK 在模拟器里真装真跑
+
+`v0.5.3` 的 `kuake-studio-0.5.3-android.apk`（8.1 MB，双 ABI）在本机
+`Medium_Phone_API_37.0`（x86_64，Android 17 / SDK 37）上完整装了一遍：
+
+| 项目 | 结果 |
+| --- | --- |
+| 安装 | `adb install -r -t` → `Success`（437 ms，走 Incremental Install） |
+| 启动 | `am start` 后 `topResumedActivity = dev.lilyco.kuakestudio/.MainActivity`，无 FATAL |
+| JNI | logcat `nativeloader: Load .../lib/x86_64/libkuake_studio_jni.so ... : ok` |
+| 进程内服务 | App 的 `/proc/net/tcp` 里 `0100007F:2253`（127.0.0.1:8787）LISTEN，且 WebView 已连上（ESTABLISHED） |
+| `/api/boot` | `backend: native`、`version: 0.5.3`、`temp: /storage/emulated/0/.../files/Download` ⇒ Java 层 `Os.setenv` 设的 HOME/TMPDIR/DIST/PORT 全部生效 |
+| 首页 | `GET /` 200，`<html lang="zh-CN" class="dark">`，加载 `assets/index-*.js` + `assets/style-*.css`（即 `assets/dist.zip` 解包后由 App 内 axum 伺候） |
+| 命令链路 | 经 `POST /api/run` + SSE 跑 `version` / `user` / `list` / `search`，都拿到标准错误信封「未找到夸克登录凭据」⇒ 分发/进度/错误通道全通（新设备无 cookie 属预期） |
+| UI 渲染 | 截图 1080×2400，暗色像素 96.3%，品牌蓝 `(67,146,247)` 14054 px ⇒ 真渲染出 shadcn 控制台，不是白屏 |
+
+扫码登录在 App 里也能走：`login` 会在 App 私有目录写出二维码 SVG
+（`.../files/Download/kuake-studio-login-qr-<pid>.svg`），默认 `timeout=300` 秒；
+用 `{"timeout":10}` 测过超时分支与提示文案都对。
+
 ## 目录
 
 ```
@@ -470,9 +545,13 @@ wix/main.wxs      WiX v3 安装包源（文件清单由 heat 生成）
 .github/workflows/build.yml   六平台 CI / 出包 / 发 Release
 tools/dump-cookies.mjs  从本机 Chrome cookie 库解出夸克 cookie 并刷新 ~/.config/kuake/.env
 tools/dump-kuake-cli-json.mjs  采集 kuake CLI 的 JSON/NDJSON 信封（原图 600 / 脱敏副本）
+tools/install-linux-desktop.sh  Linux 一键安装器（随 linux-x64 包发布为 install.sh：桌面图标 + systemd 自启）
 tools/abi-selftest.c  host 架构真链接静态库跑的 C ABI 端到端自检（15 断言，版本无关）
 tools/cc-aarch64-musl.sh   zig cc 交叉编 C 的 wrapper（Android / 鸿蒙，绕开 host gcc 与 ohos 三元组）
-tools/verify-release.mjs  一条命令核对 Release 7 资产的 SHA256 / 解包结构 / .o 架构 / ABI 符号
+tools/verify-release.mjs  一条命令核对 Release 8 资产的 SHA256 / 解包结构 / .o 架构 / ABI 符号 / APK
+android/          Android APK 宿主工程：Cargo.toml（cdylib）/ src/lib.rs（JNI）/ app/（Manifest + Java + 图标）
+android/tools/build-jni.sh  交叉编 libkuake_studio_jni.so（arm64-v8a / x86_64，NDK）
+android/tools/build-apk.sh  纯命令行出签名 APK（aapt2 + javac + d8 + zipalign + apksigner，不需要 Gradle）
 frontend/src/components/ui/   shadcn/ui 组件（基于 radix-ui 聚合包手写）
 frontend/src/components/      schema-form / command-dialog / login-dialog / 文件表格 / 控制台
 frontend/src/lib/             api / store / types / format
