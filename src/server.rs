@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Request, State};
 use axum::http::{header, HeaderValue, StatusCode, Uri};
 use axum::response::{
     sse::{Event, KeepAlive, Sse},
@@ -219,6 +219,60 @@ async fn api_upload(Json(req): Json<UploadRequest>) -> Response {
         "size": bytes.len(),
     }))
     .into_response()
+}
+
+/// 拖拽上传：请求体直接就是文件字节（不再 base64 膨胀 1/3），文件名放
+/// X-Kuake-File（UTF-8 的 base64，HTTP 头不能放中文）。
+///
+/// 为什么单独一条路由：axum 的 Json / Bytes 提取器默认只收 2 MiB body，
+/// 而拖进来的往往是几十 MB 的图片/视频。这里不经过任何提取器，自己用
+/// to_bytes 收，并把上限显式钉在 2 GiB（回环 Host + 令牌保护，用户自担）。
+/// 旧的 /api/upload（base64 JSON）保留给点击按钮的单文件上传对话框。
+async fn api_upload_raw(request: Request) -> Response {
+    const MAX_RAW: usize = 2 * 1024 * 1024 * 1024;
+    let name = raw_upload_name(
+        request
+            .headers()
+            .get("X-Kuake-File")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(""),
+    );
+    if name.is_empty() {
+        return (StatusCode::BAD_REQUEST, "文件名非法").into_response();
+    }
+    let body = match axum::body::to_bytes(request.into_body(), MAX_RAW).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::PAYLOAD_TOO_LARGE, "文件过大（上限 2 GiB）").into_response(),
+    };
+    let dir = std::env::temp_dir().join("kuake-studio-uploads");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("创建暂存目录失败: {e}"),
+        )
+            .into_response();
+    }
+    let unique = format!("{}-{}", generate_id(), name);
+    let path = dir.join(unique);
+    if let Err(e) = std::fs::write(&path, body.as_ref()) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("写入暂存文件失败: {e}"),
+        )
+            .into_response();
+    }
+    Json(serde_json::json!({
+        "path": path.to_string_lossy(),
+        "name": name,
+        "size": body.len(),
+    }))
+    .into_response()
+}
+
+/// X-Kuake-File 里放的是 UTF-8 文件名的 base64（HTTP 头不能直接放中文）。
+fn raw_upload_name(encoded: &str) -> String {
+    let bytes = base64_decode(encoded).unwrap_or_default();
+    sanitize_filename(&String::from_utf8_lossy(&bytes))
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -580,6 +634,7 @@ pub async fn serve(state: Arc<AppState>, port: u16) -> std::io::Result<()> {
         .route("/api/progress/{sid}", get(api_progress))
         .route("/api/cancel/{sid}", post(api_cancel))
         .route("/api/upload", post(api_upload))
+        .route("/api/upload/raw", post(api_upload_raw))
         .route("/api/login/start", post(api_login_start))
         .route("/api/login/status/{sid}", get(api_login_status))
         .route("/api/login/cancel/{sid}", post(api_login_cancel))
@@ -606,6 +661,14 @@ mod tests {
     #[test]
     fn base64_roundtrip() {
         assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello".to_vec());
+    }
+
+    #[test]
+    fn raw_upload_name_decodes_and_sanitizes() {
+        // "a b.txt" 的 base64；空格会被 sanitize_filename 换成下划线
+        assert_eq!(raw_upload_name("YSBiLnR4dA=="), "a_b.txt");
+        assert!(raw_upload_name("!!!not-base64!!!").is_empty());
+        assert!(raw_upload_name("").is_empty());
     }
 
     #[test]

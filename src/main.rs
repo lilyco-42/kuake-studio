@@ -254,7 +254,7 @@ mod tests {
             let (mut c, _) = l.accept().unwrap();
             let mut b = [0u8; 256];
             let _ = c.read(&mut b);
-            let body = "{\"name\":\"kuake-studio\",\"version\":\"0.5.8\"}";
+            let body = "{\"name\":\"kuake-studio\",\"version\":\"0.5.9\"}";
             let _ = c.write_all(
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",

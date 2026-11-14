@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "kuake-studio"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "aes-gcm",
  "async-stream",
@@ -1204,7 +1204,7 @@ dependencies = [
 
 [[package]]
 name = "kuake-studio-jni"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "kuake-studio",
  "rand 0.8.8",

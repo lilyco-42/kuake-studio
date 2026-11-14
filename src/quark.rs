@@ -90,6 +90,35 @@ fn err(msg: impl Into<String>) -> AppError {
     AppError::Runtime(msg.into())
 }
 
+/// 按字节上限安全截断：绝不在 UTF-8 字符中间下刀（中文报文按字节 400 硬切会 panic）。
+fn clip_utf8(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// OSS 下载链路的 403 是 callback 校验登录态；cookie 过期时回的是一大坨 XML。
+/// 折叠成用户能照做的提示——账号页扫码登录会 set_var 热更新凭据，无需重启即可重试。
+fn download_http_error(status: reqwest::StatusCode, body: &str) -> AppError {
+    let auth_expired = body.contains("auth expired")
+        || body.contains("RequestDeniedByCallback")
+        || body.contains("require login");
+    if auth_expired {
+        return err(format!(
+            "下载失败：夸克登录态已过期（HTTP {status}）。请在「账号」页重新扫码登录，成功后无需重启即可重试下载。"
+        ));
+    }
+    err(format!(
+        "download failed: status {status}, body: {}",
+        clip_utf8(body, 400)
+    ))
+}
+
 fn as_str(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -1526,10 +1555,7 @@ fn cmd_download(ctx: &Context, api: &Api, argv: &[String]) -> Result<Value, AppE
         let st = resp.status();
         let mut body = String::new();
         let _ = resp.read_to_string(&mut body);
-        return Err(err(format!(
-            "download failed: status {st}, body: {}",
-            &body[..body.len().min(400)]
-        )));
+        return Err(download_http_error(st, &body));
     }
     let mut f = std::fs::File::create(&local)?;
     let mut buf = [0u8; 64 * 1024];
@@ -2225,5 +2251,37 @@ mod tests {
         assert_eq!(arg_num("999", 50, 1, 100, "size").unwrap(), 100);
         assert_eq!(arg_num("0", 1, 1, 1000, "page").unwrap(), 1);
         assert!(arg_num("abc", 1, 1, 1000, "page").is_err());
+    }
+
+    #[test]
+    fn download_error_auth_expired_is_actionable() {
+        let xml = "<?xml version=\"1.0\"?><Error><Code>RequestDeniedByCallback</Code>\
+<Message>Callback deny this request reason: require login [auth expired]</Message></Error>";
+        let e = download_http_error(reqwest::StatusCode::FORBIDDEN, xml);
+        let msg = format!("{e}");
+        assert!(msg.contains("登录态已过期"), "{msg}");
+        assert!(msg.contains("重新扫码登录"), "{msg}");
+        assert!(
+            !msg.contains("RequestDeniedByCallback"),
+            "不该把原始 XML 抛给用户: {msg}"
+        );
+    }
+
+    #[test]
+    fn download_error_other_status_keeps_body() {
+        let e = download_http_error(reqwest::StatusCode::NOT_FOUND, "plain missing");
+        let msg = format!("{e}");
+        assert!(msg.contains("download failed: status 404"), "{msg}");
+        assert!(msg.contains("plain missing"), "{msg}");
+    }
+
+    #[test]
+    fn clip_utf8_never_splits_multibyte() {
+        let s = "错误".repeat(300); // 每字 3 字节，共 900 字节
+        let clipped = clip_utf8(&s, 400);
+        assert!(clipped.len() <= 400);
+        assert!(std::str::from_utf8(clipped.as_bytes()).is_ok());
+        assert!(clipped.chars().all(|c| c == '错' || c == '误'));
+        assert_eq!(clip_utf8("short", 400), "short");
     }
 }

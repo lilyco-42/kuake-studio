@@ -16,7 +16,7 @@ use crate::server::AppState;
 /// 前端从 <meta name="kuake-token"> 读出后塞进这个头
 pub const TOKEN_HEADER: &str = "X-Kuake-Token";
 
-const PROTECTED_POST: &[&str] = &["/api/run", "/api/upload", "/api/cancel"];
+const PROTECTED_POST: &[&str] = &["/api/run", "/api/upload", "/api/upload/raw", "/api/cancel"];
 /// 扫码登录会改本机凭据，POST 必须同样带令牌 + 回环 Origin。
 const PROTECTED_PREFIXES: &[&str] = &["/api/login/"];
 
@@ -103,6 +103,13 @@ mod tests {
         assert!("/api/login/start".starts_with(PROTECTED_PREFIXES[0]));
         assert!("/api/login/cancel/abc".starts_with(PROTECTED_PREFIXES[0]));
         assert!(!"/api/loginish/start".starts_with(PROTECTED_PREFIXES[0]));
+    }
+
+    #[test]
+    fn raw_upload_is_token_protected() {
+        assert!(PROTECTED_POST.contains(&"/api/upload/raw"));
+        // 前缀不能误伤：/api/upload/raw-extra 不该被当成受保护路径
+        assert!(!PROTECTED_POST.contains(&"/api/upload/raw-extra"));
     }
 
     #[test]

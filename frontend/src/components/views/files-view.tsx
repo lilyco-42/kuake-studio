@@ -38,6 +38,7 @@ import { CommandDialog } from "@/components/command-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { InfoDialog } from "@/components/info-dialog";
 import { UploadDialog } from "@/components/upload-dialog";
+import { DropUpload } from "@/components/drop-upload";
 import { DecryptDialog } from "@/components/decrypt-dialog";
 import { fileIcon } from "@/components/file-icon";
 import { useRunner } from "@/lib/store";
@@ -198,7 +199,7 @@ export function FilesView({
       : "";
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <DropUpload dirPath={dir.path} onDone={() => void load(dir.path)}>
       {/* 工具条：面包屑 + 排序 + 新建/上传 */}
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
@@ -649,6 +650,6 @@ export function FilesView({
           }
         }}
       />
-    </div>
+    </DropUpload>
   );
 }

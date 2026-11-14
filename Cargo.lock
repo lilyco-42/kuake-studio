@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "kuake-studio"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "aes-gcm",
  "async-stream",

@@ -56,6 +56,38 @@ export async function uploadTemp(name: string, dataB64: string): Promise<{ path:
   return res.json();
 }
 
+/** UTF-8 字符串 → 标准 base64（HTTP 头只能放 ASCII，中文文件名必须编码后再传） */
+export function base64Utf8(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+/**
+ * 拖拽上传专用：把文件原始二进制直接 POST 到 /api/upload/raw。
+ * 旧 uploadTemp 走 base64 JSON，受 axum 默认 2 MiB body 限制；这条路由自带 2 GiB 上限。
+ * 文件名只用于生成暂存路径，网盘目标名由调用方用原始文件名单独拼。
+ */
+export async function uploadTempRaw(
+  name: string,
+  file: Blob,
+  signal?: AbortSignal,
+): Promise<{ path: string; name: string; size: number }> {
+  const res = await fetch("/api/upload/raw", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-Kuake-Token": token,
+      "X-Kuake-File": base64Utf8(name),
+    },
+    body: file,
+    signal,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 /** 浏览器没有真实文件路径，只能 base64 上传到后端暂存目录 */
 export function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

@@ -173,7 +173,7 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 
 | 页面 | 能力 |
 | --- | --- |
-| 文件 | 目录浏览、面包屑/历史栈、排序（名称/时间/大小）、新建文件夹、上传（可选**上传前加密**）、重命名、移动、复制、删除、详情、下载、**解密到本机**、创建分享、**勾选多选后批量移动 / 复制 / 删除**（v0.5.6） |
+| 文件 | 目录浏览、面包屑/历史栈、排序（名称/时间/大小）、新建文件夹、上传（可选**上传前加密**）、**拖拽上传（整个文件夹保留层级，v0.5.9）**、重命名、移动、复制、删除、详情、下载、**解密到本机**、创建分享、**勾选多选后批量移动 / 复制 / 删除**（v0.5.6） |
 | 搜索 | **全盘按文件名搜索**、命中高亮、完整路径反查、复制路径、跳到所在目录、分页加载（v0.4.0） |
 | 分享 | 我的分享列表（有效期/浏览/转存）、复制链接、浏览器打开、取消分享、转存他人分享 |
 | 回收站 | 最近删除列表（删除时间/剩余天数）、勾选后**批量恢复**、**永久删除**、分页加载（v0.5.5） |
@@ -215,6 +215,42 @@ Linux 刻意不再装 `systemd --user` unit——两套并存时托盘取消勾�
 误判成「已在运行」。桌面快捷方式显示名统一为「夸克网盘」；Windows WiX 快捷方式
 保留 ASCII 名（candle 没有 codepage 参数，改中文有编码风险），macOS `.app` 的
 `CFBundleDisplayName` 已改为「夸克网盘」。
+
+## 文件页拖拽上传（v0.5.9）
+
+把文件或整个文件夹从系统文件管理器直接拖到文件页，页面浮出「松手即上传到当前目录」遮罩；
+松手后右下角出现队列面板，逐项显示 排队 → 暂存 → 上传中 → 完成 / 跳过 / 失败，可随时
+「停止」整条队列（中断在途请求并取消后端任务），跑完自动刷新当前目录。
+
+- **整文件夹保留层级**：用 `DataTransferItem.webkitGetAsEntry()` 递归展开（`readEntries`
+  要循环读到空批次，Chrome 每批最多 100 条），目标写成 `/当前目录/相册/2026/a.jpg`；
+  缺失的父目录由后端 `ensure_dir` 逐级自动建，前端不必先建目录。CDP 实测拖一棵带 `sub/`
+  子目录的文件夹，网盘上真的出现 `/…/sub/nested.txt`（12 B），验完已删除并永久清除。
+- **走原始二进制，不受 2 MiB 限制**：新路由 `POST /api/upload/raw` 直接收 body，文件名放
+  `X-Kuake-File`（UTF-8 → base64，中文不丢），handler 内自设 2 GiB 上限，且同样受令牌 /
+  回环 Host / Origin 三重守卫。旧 `POST /api/upload`（base64 JSON）保留给「上传」按钮的
+  加密上传——它的 axum 默认 2 MiB body 上限会让几 MB 图片直接 413，base64 还膨胀 1/3。
+  **实测**：3 MiB 原始 body + 中文文件名 → 200；无令牌 → 401；伪造 Host → 403。
+- **不新增命令**：每个文件复用现有 `upload`：先 `/api/upload/raw` 暂存到本机临时目录，
+  再 `run("upload", {file: staged.path, dest: 完整网盘路径})`，命令数仍是 25。
+- 同名文件由后端判为「跳过」而非失败；路径段清洗掉斜杠、反斜杠、控制字符与 `.` / `..`。
+  拖一段文字 / 一个链接不会触发（`dataTransfer.types` 必须含 `Files`）；无 entry 时回退 `dt.files`。
+
+## 下载报 403 / auth expired：刷新登录态（v0.5.9）
+
+夸克下载直链是 OSS callback 校验：cookie 旧一点，`download` 取直链仍成功，真正 GET 落盘
+时返回 `403 Forbidden` + `RequestDeniedByCallback / require login [auth expired]`。这**不是客户端
+bug**——同一份 cookie 用原版 `kuake` CLI 下载同样 403，带/不带 cookie、带/不带 Referer 四个
+组合全被拒。v0.5.9 起把这坨 XML 折叠成一句能照做的提示：
+
+> 下载失败：夸克登录态已过期（HTTP 403 Forbidden）。请在「账号」页重新扫码登录，
+> 成功后无需重启即可重试下载。
+
+扫码成功时 `login.rs` 会 `std::env::set_var("KUAKE_COOKIE", …)` 并写回
+`~/.config/kuake/.env`，而 `quark.rs::cookie()` 每次请求都重读进程环境 ⇒ **无需重启**。
+顺手把按字节 400 硬切的 `&body[..400]` 换成 UTF-8 边界安全的 `clip_utf8`，中文错误报文不再
+有切坏字符 panic 的风险。不要跑 `dump-cookies.mjs --write-env` 碰运气：无桌面 keyring 时
+Chrome 的 v10/v11 cookie 解密不出来，会写出空凭据。
 
 ## Android 版本号防漂移（v0.5.8）
 
@@ -747,7 +783,7 @@ src/crypt.rs      .kcrypt 容器：AES-256-GCM 分块 + PBKDF2-SHA256 派生密�
 src/quark.rs      自研夸克 API：reqwest 直连官方接口，复刻 CLI 信封（默认后端）
 src/login.rs      夸克扫码登录：cookie jar / QR SVG / service_ticket 换 cookie / 校验昵称 / 备份写 .env
 src/kuake.rs      kuake CLI 回退后端 + 单点拦截（脏行解析、取消、超时、进度）
-src/server.rs     axum 宿主：boot/schema/run/progress/cancel/upload/login + 静态托管（desktop）
+src/server.rs     axum 宿主：boot/schema/run/progress/cancel/upload/upload-raw/login + 静态托管（desktop）
 src/security.rs   回环闸 + 令牌（desktop）
 src/paths.rs      HOME / USERPROFILE 与 ~ 展开（Windows 兼容）
 build.rs          Windows 目标嵌 exe 图标与版本信息
@@ -765,5 +801,7 @@ android/tools/build-jni.sh  交叉编 libkuake_studio_jni.so（arm64-v8a / x86_6
 android/tools/build-apk.sh  纯命令行出签名 APK（aapt2 + javac + d8 + zipalign + apksigner，不需要 Gradle）
 frontend/src/components/ui/   shadcn/ui 组件（基于 radix-ui 聚合包手写，含 checkbox）
 frontend/src/components/      schema-form / command-dialog / login-dialog / 文件表格 / 回收站 / 控制台
-frontend/src/lib/             api / store / types / format
+frontend/src/components/drop-upload.tsx   拖拽上传外壳：遮罩 / 队列 / 停止 / 逐文件暂存 + upload
+frontend/src/lib/drop.ts    拖拽纯函数：webkitGetAsEntry 递归 / 路径清洗 / 跳过与中断判定
+frontend/src/lib/             api / store / types / format / drop（拖拽收集）
 ```
