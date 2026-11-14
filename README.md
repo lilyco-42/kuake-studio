@@ -43,10 +43,12 @@ iOS / 鸿蒙发**进程内 FFI 静态库**（宿主 App 自己链原生层 + Web
 | Linux | 在解压目录里运行一次 `./install.sh` | 双击桌面的「夸克网盘」 | `./install.sh --uninstall` |
 | Android | 把 `*.apk` 传到手机点开安装（允许「未知来源」） | 点桌面的「夸克网盘」图标 | 长按图标 → 卸载 |
 
-Linux 的 `./install.sh` 把程序装到 `~/.local/opt/kuake-studio`、注册一个
-`systemd --user` 后台服务（开机自启、崩溃自动重启）、生成桌面图标与应用菜单项；
-`open.sh` 会在服务没起时先拉起再开浏览器。服务只监听 `127.0.0.1:8787`，局域网内
-其他机器访问不到；卸载脚本只删程序与入口，不动凭据和已下载的文件。
+Linux 的 `./install.sh` 把程序装到 `~/.local/opt/kuake-studio`，生成桌面「夸克网盘」
+图标与应用菜单项，并写一份 XDG 登录项 `~/.config/autostart/kuake-studio.desktop`
+作为**开机自启的唯一真源**（托盘菜单「开机自启」勾选框读写的就是这个文件，
+不再额外装 `systemd --user` 服务）。`open.sh` 会在服务没起时先拉起再开浏览器。
+服务只监听 `127.0.0.1:8787`，局域网内其他机器访问不到；卸载脚本只删程序与入口，
+不动凭据和已下载的文件。
 
 > **Android 现在是一份真 APK**（`android/` 独立宿主工程）：`*-android.apk` 里是
 > WebView 宿主 + `libkuake_studio_jni.so`（JNI 调同一份 C ABI）+ 内置 `dist.zip`，
@@ -189,6 +191,30 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 handler。`build_registry()` 现在统一在注册前按 schema 补齐**缺失或 `null`** 的参数，
 显式给的值（含 `0` / 空串）一律不覆盖。修掉的实际症状：`search` 不传 `size` 曾只回 1 条
 （应为 50）、`share` 不传 `days` 直接报参数错、`login` 不传 `timeout` 只等 10 秒。
+
+## 系统托盘与跨平台快捷方式（v0.5.7）
+
+桌面端（Windows / Linux / macOS）启动后除了自动开浏览器，还会在系统托盘 / 菜单栏
+驻留一个图标：**左键打开界面、右键弹菜单**（打开界面 / 开机自启勾选 / 退出）。
+关掉浏览器窗口不会退出服务，从托盘「退出」才真正结束。
+
+| 平台 | 托盘实现 | 开机自启唯一登录项 |
+| --- | --- | --- |
+| Windows | 自跑 Win32 消息泵 | 注册表 `HKCU\...\CurrentVersion\Run` 的 `KuakeStudio` 值（`winreg`） |
+| Linux | `ksni` 纯 Rust D-Bus StatusNotifierItem，**零** GTK3 / libappindicator 依赖 | `~/.config/autostart/kuake-studio.desktop`（XDG，可用 `XDG_CONFIG_HOME` 覆盖） |
+| macOS | 主线程 `NSStatusItem` + `CFRunLoop` | `~/Library/LaunchAgents/dev.lilyco.kuake-studio.plist`（LaunchAgent） |
+
+三平台的「开机自启」都只控制**一份**登录项，勾选框在 `src/tray.rs` 里直接读写它；
+Linux 刻意不再装 `systemd --user` unit——两套并存时托盘取消勾选只能删掉 XDG
+那份，systemd 下次登录照样把服务拉起来，「关掉自启」就成了假动作。
+没有桌面环境（无 D-Bus StatusNotifierWatcher）时托盘 `build()` 失败会打印一行
+提示并**自动降级为纯后台服务**，`/api/boot` 与 Web 界面照常可用，不影响启动。
+
+单实例：重复双击图标 / 运行 exe 会先探活 `/api/boot` 并校验响应里的 `name`
+是 `kuake-studio`，认出自家实例就只把浏览器带出来；端口被无关程序占用时不会被
+误判成「已在运行」。桌面快捷方式显示名统一为「夸克网盘」；Windows WiX 快捷方式
+保留 ASCII 名（candle 没有 codepage 参数，改中文有编码风险），macOS `.app` 的
+`CFBundleDisplayName` 已改为「夸克网盘」。
 
 ## 全盘搜索（v0.4.0）
 
@@ -700,7 +726,8 @@ arm64 / x86_64 两套 so，原样塞回构建目录再打可调试包（`KUAKE_S
 ## 目录
 
 ```
-src/main.rs       桌面入口：--cli / --mcp / --schema / 默认 Web（仅 desktop 特性编）
+src/main.rs       桌面入口：--cli / --mcp / --schema / 默认 Web + 系统托盘 / 单实例（仅 desktop 特性编）
+src/tray.rs       系统托盘：图标 / 菜单 / 三平台开机自启 / 主线程事件泵 / 无桌面环境降级
 src/lib.rs        核心库：build_registry() / call() / set_cookie()（六平台共用，不依赖 axum）
 src/ffi.rs        C ABI：version/boot/schemas/set_cookie/call/free（catch_unwind 兜底）
 include/kuake_studio.h   C 头文件：宿主 App 接入的 6 个函数与约定
@@ -717,7 +744,8 @@ wix/main.wxs      WiX v3 安装包源（文件清单由 heat 生成）
 .github/workflows/build.yml   六平台 CI / 出包 / 发 Release
 tools/dump-cookies.mjs  从本机 Chrome cookie 库解出夸克 cookie 并刷新 ~/.config/kuake/.env
 tools/dump-kuake-cli-json.mjs  采集 kuake CLI 的 JSON/NDJSON 信封（原图 600 / 脱敏副本）
-tools/install-linux-desktop.sh  Linux 一键安装器（随 linux-x64 包发布为 install.sh：桌面图标 + systemd 自启）
+tools/install-linux-desktop.sh  Linux 一键安装器（随 linux-x64 包发布为 install.sh：桌面图标 + XDG 登录项自启 + 托盘）
+tools/gen-tray-icon.py  从 1024 PNG 生成 64x64 RGBA 托盘图标（assets/tray-icon-64.rgba）
 tools/abi-selftest.c  host 架构真链接静态库跑的 C ABI 端到端自检（15 断言，版本无关）
 tools/cc-aarch64-musl.sh   zig cc 交叉编 C 的 wrapper（Android / 鸿蒙，绕开 host gcc 与 ohos 三元组）
 tools/verify-release.mjs  一条命令核对 Release 8 资产的 SHA256 / 解包结构 / .o 架构 / ABI 符号 / APK

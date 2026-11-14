@@ -1,11 +1,15 @@
 // kuake-studio 的 Windows 资源：exe 图标 + 属性面板里的版本信息。
 // 只在 build.rs 检测到目标平台是 Windows 时才编译。
+//
+// KS_ICON_PATH / KS_VERSION_CSV / KS_VERSION_STR 是占位符，由 build.rs 按
+// CARGO_PKG_VERSION 与实际绝对路径替换后写到 OUT_DIR 再交给 llvm-rc。
+// 这样版本号只有 Cargo.toml 一个真源，不会再出现「exe 显示 0.3.0」的漂移。
 
-1 ICON "kuake-studio.ico"
+1 ICON "KS_ICON_PATH"
 
 1 VERSIONINFO
-FILEVERSION 0,3,0,0
-PRODUCTVERSION 0,3,0,0
+FILEVERSION KS_VERSION_CSV
+PRODUCTVERSION KS_VERSION_CSV
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0x0L
 FILEOS 0x40004L
@@ -18,12 +22,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "lilyco-42"
             VALUE "FileDescription", "kuake-studio - Quark Drive client"
-            VALUE "FileVersion", "0.3.0"
+            VALUE "FileVersion", "KS_VERSION_STR"
             VALUE "InternalName", "kuake-studio"
             VALUE "LegalCopyright", "MIT OR Apache-2.0"
             VALUE "OriginalFilename", "kuake-studio.exe"
             VALUE "ProductName", "kuake-studio"
-            VALUE "ProductVersion", "0.3.0"
+            VALUE "ProductVersion", "KS_VERSION_STR"
         END
     END
     BLOCK "VarFileInfo"

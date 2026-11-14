@@ -191,6 +191,14 @@ jobs:
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
           }
 
+          # 3) exe 版本资源必须等于 Cargo.toml 版本（build.rs 从 CARGO_PKG_VERSION 生成，防漂移）
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.*)"').Matches[0].Groups[1].Value
+          $vi = (Get-Item $exe).VersionInfo
+          Write-Host "exe FileVersion=$($vi.FileVersion) ProductVersion=$($vi.ProductVersion) 期望=$ver"
+          if ($vi.FileVersion -notlike "$ver*" -or $vi.ProductVersion -notlike "$ver*") {
+            throw "exe 版本资源与 Cargo.toml 不一致: $ver"
+          }
+
       - name: 打包（windows：便携 zip + MSI）
         if: matrix.name == 'windows-x64'
         shell: pwsh
@@ -343,7 +351,7 @@ jobs:
           <plist version="1.0">
           <dict>
             <key>CFBundleName</key><string>kuake-studio</string>
-            <key>CFBundleDisplayName</key><string>kuake-studio</string>
+            <key>CFBundleDisplayName</key><string>夸克网盘</string>
             <key>CFBundleIdentifier</key><string>dev.lilyco.kuake-studio</string>
             <key>CFBundleVersion</key><string>VER_PLACEHOLDER</string>
             <key>CFBundleShortVersionString</key><string>VER_PLACEHOLDER</string>

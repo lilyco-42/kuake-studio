@@ -1,11 +1,13 @@
 [Desktop Entry]
 Type=Application
-Name=kuake-studio
-Name[zh_CN]=kuake-studio 网盘客户端
-Comment=Quark Drive client built on the lilyco framework
-Comment[zh_CN]=基于 lilyco 框架的夸克网盘客户端
+Version=1.0
+Name=夸克网盘
+Name[zh_CN]=夸克网盘
+GenericName=网盘客户端
+Comment=基于 lilyco 框架的夸克网盘客户端（kuake-studio）
 Exec=kuake-studio
 Icon=kuake-studio
 Terminal=false
 Categories=Network;FileTransfer;Utility;
 StartupNotify=true
+Keywords=quark;kuake;网盘;云盘;

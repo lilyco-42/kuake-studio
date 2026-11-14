@@ -1,6 +1,6 @@
 [package]
 name = "kuake-studio"
-version = "0.5.6"
+version = "0.5.7"
 edition = "2021"
 description = "Quark 网盘客户端 —— lilyco 框架（Registry/App/Safety）+ shadcn/ui 前端；桌面安装包 + 移动/鸿蒙进程内原生库"
 license = "MIT OR Apache-2.0"
@@ -9,7 +9,18 @@ license = "MIT OR Apache-2.0"
 # 打真安装包并自动开浏览器。移动 / 鸿蒙只编 [lib] 的 C ABI，不开端口、不打开浏览器。
 [features]
 default = ["desktop"]
-desktop = ["dep:axum", "dep:tokio", "dep:async-stream"]
+desktop = [
+    "dep:axum",
+    "dep:tokio",
+    "dep:async-stream",
+    # 系统托盘：只在桌面三平台有效（见下方 target cfg）；Android / iOS / 鸿蒙
+    # 的 --no-default-features --lib 不会解析到这些依赖。
+    "dep:tray-icon",
+    "dep:windows-sys",
+    "dep:winreg",
+    "dep:objc2-core-foundation",
+    "dep:objc2-app-kit",
+  ]
 
 [[bin]]
 name = "kuake-studio"
@@ -56,6 +67,25 @@ base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 qrcodegen = "1.8"
 httpdate = "1.0"
+
+# ── 系统托盘（仅桌面三平台）──────────────────────────────────────────
+# 关键：aarch64-unknown-linux-ohos 的 target_os 也是 "linux"，但 target_env="ohos"。
+# 若写成无条件 cfg(target_os="linux")，鸿蒙静态库会被拖进 zbus / ksni。
+# Android(target_os=android) / iOS(target_os=ios) 天然不匹配。
+[target.'cfg(any(target_os = "windows", target_os = "macos", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
+# Linux 走 ksni（纯 Rust D-Bus StatusNotifierItem）：不要默认的 libappindicator / GTK3，
+# 这样 Linux 二进制保持「零 GUI 系统库依赖」，CI 纯 cargo build 不需要装 gtk3-dev。
+tray-icon = { version = "0.25.1", default-features = false, features = ["ksni"], optional = true }
+
+# Windows：托盘后端要宿主自己跑 Win32 消息泵；开机自启用 HKCU Run 键。
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"], optional = true }
+winreg = { version = "0.56", optional = true }
+
+# macOS：托盘必须建在主线程且已有 CFRunLoop，宿主用 CFRunLoop::run_in_mode 驱动。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFRunLoop", "CFDate", "CFCGTypes"], optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication"], optional = true }
 
 [build-dependencies]
 # 只在目标平台是 Windows 时生效（见 build.rs）：把 assets/kuake-studio.rc
