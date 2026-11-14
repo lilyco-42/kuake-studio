@@ -8,6 +8,10 @@
 //!   TMPDIR            应用 cacheDir（std::env::temp_dir）
 //!   KUAKE_STUDIO_DIST 从 assets 解出的 dist/ 绝对路径
 //!   KUAKE_STUDIO_NO_OPEN=1 / KUAKE_STUDIO_PORT=8787
+//!
+//! 登录凭据：登录成功后 login.rs 把 cookie 写进 $HOME/.config/kuake/.env（$HOME 就是
+//! filesDir），因此冷启动必须把该文件读回进程环境 —— 这一步在 server::serve() 里统一做，
+//! 与桌面 main.rs 走同一入口，本文件不需要重复调用。
 //! 因此 JNI 函数不需要解析 jstring，签名里前 2 个参数忽略即可。
 
 use std::ffi::c_void;

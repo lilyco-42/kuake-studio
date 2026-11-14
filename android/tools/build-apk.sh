@@ -37,7 +37,19 @@ echo "[apk] build-tools=$BT"
 WORK="$REPO/android/build/apk-work"
 rm -rf "$WORK"
 mkdir -p "$WORK/classes" "$WORK/assets" "$WORK/lib"
-OUT="$REPO/pkg/kuake-studio-$VER-android.apk"
+LINK_DEBUG=""
+if [ "${KUAKE_STUDIO_APK_DEBUGGABLE:-0}" = "1" ]; then
+  LINK_DEBUG="--debug-mode"
+fi
+
+# KUAKE_STUDIO_APK_DEBUGGABLE=1 出一个 android:debuggable="true" 的诊断包，
+# 文件名带 -debuggable 后缀，绝不会顶替要发布的 kuake-studio-<ver>-android.apk。
+# 只用于 adb run-as 进 App 私有目录验证凭据落盘（生产包保持不可调试）。
+if [ "${KUAKE_STUDIO_APK_DEBUGGABLE:-0}" = "1" ]; then
+  OUT="$REPO/pkg/kuake-studio-$VER-android-debuggable.apk"
+else
+  OUT="$REPO/pkg/kuake-studio-$VER-android.apk"
+fi
 mkdir -p "$(dirname "$OUT")"
 
 # 前端产物打成单个 zip，Java 层用 ZipInputStream 解到 filesDir/dist
@@ -71,6 +83,7 @@ fi
 # 1) 资源编译 + 链接（manifest / res / assets -> base.apk）
 "$BT/aapt2" compile --dir "$APP/res" -o "$WORK/compiled.zip"
 "$BT/aapt2" link -o "$WORK/base.apk" \
+  ${LINK_DEBUG:+"$LINK_DEBUG"} \
   -I "$PLATFORM_JAR" \
   --manifest "$APP/AndroidManifest.xml" \
   -R "$WORK/compiled.zip" --auto-add-overlay \

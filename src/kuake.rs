@@ -66,7 +66,7 @@ fn load_env_fallback_inner() {
 
 /// 解析 .env 文本，只收 KUAKE_ 前缀；会剥掉值两侧的引号
 /// （写 env 时值必须带引号：cookie 里有空格和分号，裸写会被 shell 的 source 拆开）
-fn parse_env_text(text: &str) -> Vec<(String, String)> {
+pub(crate) fn parse_env_text(text: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for line in text.lines() {
         let line = line.trim();

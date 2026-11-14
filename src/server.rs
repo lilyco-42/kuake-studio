@@ -563,6 +563,16 @@ pub fn build_state(registry: Registry, token: String, dist: std::path::PathBuf) 
 }
 
 pub async fn serve(state: Arc<AppState>, port: u16) -> std::io::Result<()> {
+    // 凭据恢复的唯一入口：桌面 main.rs 与 Android JNI（android/src/lib.rs）都从这里起服务。
+    //
+    // 为什么放在 serve() 而不是各自入口：login 成功后 login.rs 只把 cookie 写进
+    // $HOME/.config/kuake/.env 并 set_var 到**当次进程**，重启后必须从文件读回。
+    // 桌面端 main.rs 早就调了，Android 走 JNI 不经过 main —— 于是 v0.5.3 及以前在
+    // Android 上「扫码登录后杀掉 App 重开，凭据全丢，每次启动都要重扫」。
+    // 放在 serve() 里，任何「跑本机服务」的宿主都自动具备，不会再有第三处漏掉。
+    // 走 FFI 的 iOS / 鸿蒙宿主不经过 serve()，它们按设计由宿主自己注入凭据。
+    crate::kuake::load_env_fallback();
+
     let app = Router::new()
         .route("/api/boot", get(api_boot))
         .route("/api/schema", get(api_schema))

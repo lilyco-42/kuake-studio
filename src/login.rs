@@ -414,6 +414,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 登录写入的 .env 必须能被 kuake::parse_env_text 原样读回。
+    ///
+    /// 这条钉住的是「扫码登录后重启客户端仍处于登录态」这个用户可见契约：
+    /// 写盘格式（KUAKE_COOKIE='…' 单引号包裹）与读回时的去引号逻辑一旦谁改歪了，
+    /// 表现就是「刚登录成功，重开又要扫码」——Android 上曾真发生过（冷启动不读文件）。
+    #[test]
+    fn env_roundtrips_so_relaunch_keeps_login() {
+        let dir = std::env::temp_dir().join(format!("ks-login-rt-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(".env");
+        let cookie = "__pus=abc==; __uid=u; b-user-id=xyz; _UP_A4A_11_=w1; _UP_D_=pc";
+        write_env(&path, cookie).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let pairs = crate::kuake::parse_env_text(&text);
+        let got = pairs
+            .iter()
+            .find(|(k, _)| k == "KUAKE_COOKIE")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(got, Some(cookie), "写盘→读回必须逐字一致");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn write_env_rejects_shell_unsafe_cookie() {
         let dir = std::env::temp_dir().join(format!("ks-login-unsafe-{}", std::process::id()));

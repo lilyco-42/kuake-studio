@@ -143,6 +143,14 @@ adb install -r pkg/kuake-studio-*-android.apk    # 4) 装到真机 / 模拟器
 `.so` 收集是按 `android/target/<triple>/release/` 的目录名映射 ABI 的，所以想加 `armeabi-v7a`
 只要多传一个 `armv7-linux-androideabi` 给 `build-jni.sh`。
 
+出诊断包（带 `android:debuggable="true"`，方便 `adb shell run-as` 读写 App 私有目录）：
+
+```bash
+KUAKE_STUDIO_APK_DEBUGGABLE=1 ./android/tools/build-apk.sh   # → pkg/kuake-studio-<ver>-android-debuggable.apk
+```
+
+可调试构建另起文件名，**不会顶替发布用的** `pkg/kuake-studio-<ver>-android.apk`。
+
 ### 同一个二进制，三种用法
 
 ```bash
@@ -522,10 +530,25 @@ x86_64 + arm64，`Info.plist` 的 `CFBundleVersion` 等于 tag 版本）、nativ
 | 命令链路 | 经 `POST /api/run` + SSE 跑 `version` / `user` / `info`，**每条都只有 1 个终态事件**（这条同时回归了 v0.5.3 修的「重复 error」bug），都拿到标准错误信封「未找到夸克登录凭据」⇒ 分发/进度/错误通道全通（新设备无 cookie 属预期） |
 | 扫码登录 | `login --timeout 12` 在 App 私有目录写出 `kuake-studio-login-qr-7880.svg`，跑出 4 条 log + 1 条超时 error，文案与桌面端逐字一致 |
 | UI 渲染 | 截图 1080×2400，暗色像素 96.3%，品牌蓝 `(67,146,247)` 14054 px ⇒ 真渲染出 shadcn 控制台，不是白屏 |
+| 重启后仍登录 | 登录后 `am force-stop` 再冷启动，跑 `user` 直接返回 `nickname=lilyco42 / SUPER_VIP`（`CREDS_RESTORED: true`），无需重扫 |
 
 扫码登录在 App 里也能走：`login` 会在 App 私有目录写出二维码 SVG
 （`.../files/Download/kuake-studio-login-qr-<pid>.svg`），默认 `timeout=300` 秒；
 用 `{"timeout":10}` 测过超时分支与提示文案都对。
+
+### Android 上「登录一次，之后一直在」
+
+扫码登录成功后凭据写到 App 私有目录的 `files/.config/kuake/.env`（Java 层已把 `HOME`
+指向这里），所以冷启动必须把这份文件读回来——否则每次重开 App 都得重新扫码。
+这一步统一由 `src/server.rs::serve()` 开头的 `crate::kuake::load_env_fallback()` 做（桌面 bin
+与 Android JNI 都经过 serve，一处覆盖）。
+
+v0.5.4 之前 Android 宿主绕过了这一步，A/B 实测复现过：把 `.env` 推到 App 私有目录后
+
+- 未修复：`user` 返回「未找到夸克登录凭据」
+- 已修复：`user` 返回 `nickname=lilyco42 / SUPER_VIP`（`CREDS_RESTORED: true`）
+
+`src/login.rs` 里的 `env_roundtrips_so_relaunch_keeps_login` 钉住写盘格式与读回去引号逻辑的往返一致。
 
 ## 目录
 
