@@ -507,18 +507,20 @@ x86_64 + arm64，`Info.plist` 的 `CFBundleVersion` 等于 tag 版本）、nativ
 | 关键结论 | 上游 CLI 的 `403 auth expired`、`program not found` 都不再出现；Windows 包开箱即用 |
 ## 实测记录：Android APK 在模拟器里真装真跑
 
-`v0.5.3` 的 `kuake-studio-0.5.3-android.apk`（8.1 MB，双 ABI）在本机
-`Medium_Phone_API_37.0`（x86_64，Android 17 / SDK 37）上完整装了一遍：
+下面这轮验的是 **Release 上的成品 APK**（`node tools/verify-release.mjs` 匿名下载下来的那个），
+不是本地构建的中间产物：`kuake-studio-0.5.3-android.apk`（6.2 MB，含 arm64-v8a + x86_64 两套
+`.so`），装在本机 `Medium_Phone_API_37.0`（x86_64，Android 17 / SDK 37）上完整跑了一遍：
 
 | 项目 | 结果 |
 | --- | --- |
-| 安装 | `adb install -r -t` → `Success`（437 ms，走 Incremental Install） |
+| 安装 | `adb install -r -t` → `Success`（先 `adb uninstall` 清干净旧包再装） |
 | 启动 | `am start` 后 `topResumedActivity = dev.lilyco.kuakestudio/.MainActivity`，无 FATAL |
 | JNI | logcat `nativeloader: Load .../lib/x86_64/libkuake_studio_jni.so ... : ok` |
 | 进程内服务 | App 的 `/proc/net/tcp` 里 `0100007F:2253`（127.0.0.1:8787）LISTEN，且 WebView 已连上（ESTABLISHED） |
 | `/api/boot` | `backend: native`、`version: 0.5.3`、`temp: /storage/emulated/0/.../files/Download` ⇒ Java 层 `Os.setenv` 设的 HOME/TMPDIR/DIST/PORT 全部生效 |
 | 首页 | `GET /` 200，`<html lang="zh-CN" class="dark">`，加载 `assets/index-*.js` + `assets/style-*.css`（即 `assets/dist.zip` 解包后由 App 内 axum 伺候） |
-| 命令链路 | 经 `POST /api/run` + SSE 跑 `version` / `user` / `list` / `search`，都拿到标准错误信封「未找到夸克登录凭据」⇒ 分发/进度/错误通道全通（新设备无 cookie 属预期） |
+| 命令链路 | 经 `POST /api/run` + SSE 跑 `version` / `user` / `info`，**每条都只有 1 个终态事件**（这条同时回归了 v0.5.3 修的「重复 error」bug），都拿到标准错误信封「未找到夸克登录凭据」⇒ 分发/进度/错误通道全通（新设备无 cookie 属预期） |
+| 扫码登录 | `login --timeout 12` 在 App 私有目录写出 `kuake-studio-login-qr-7880.svg`，跑出 4 条 log + 1 条超时 error，文案与桌面端逐字一致 |
 | UI 渲染 | 截图 1080×2400，暗色像素 96.3%，品牌蓝 `(67,146,247)` 14054 px ⇒ 真渲染出 shadcn 控制台，不是白屏 |
 
 扫码登录在 App 里也能走：`login` 会在 App 私有目录写出二维码 SVG
