@@ -288,6 +288,14 @@ handler。`build_registry()` 现在统一在注册前按 schema 补齐**缺失�
 三条 schema 的 `list` 参数与 T1 标记），`cargo clippy -- -D warnings` 零警告；
 前端 `npm run typecheck` / `npm run build` 通过。
 
+发版产物也跑过运行态：从 `kuake-studio-0.5.6-linux-x64.tar.gz` 解出的原生二进制
+用 `start.sh --port 8795` 起在回环上，`/api/boot` 报 `version=0.5.6 / backend=native`，
+`GET /` 返回内嵌前端、`GET /api/schema` 返回 25 条命令（含 3 条 `batch-*`）；
+真账号 `user` / `list` / `search`（不传 `size` 仍回 18 条）/ `share-list` 全 OK，
+三条批量命令喂不存在的路径都在发写请求之前整体中止，报「找不到路径」而不留半成品。
+`node tools/verify-release.mjs --tag v0.5.6 --json` 110 项全过（APK `versionName=0.5.6`、
+双 ABI、v2/v3 签名）。
+
 ## 架构
 
 ```
@@ -527,8 +535,8 @@ cd ~/code/kuake-studio/tools
 node tools/verify-release.mjs
 
 # 指定 tag / 指定缓存目录 / 机器可读输出
-node tools/verify-release.mjs --tag v0.5.5 --json
-node tools/verify-release.mjs --tag v0.5.5 --dir /tmp/ks-verify --no-download
+node tools/verify-release.mjs --tag v0.5.6 --json
+node tools/verify-release.mjs --tag v0.5.6 --dir /tmp/ks-verify --no-download
 ```
 
 检查项：资产齐全（Windows 2 + Linux / macOS / **Android APK** / Android 静态库 / iOS / 鸿蒙各 1 = 8）、非草稿、
