@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 版本名不在此硬编码：由 android/tools/build-apk.sh 用 aapt2 link 的 version-name 参数
+     从 Cargo.toml 读取注入，避免发版时漏同步导致「代码发了新版、包里还是旧版本号」。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="dev.lilyco.kuakestudio"
-    android:versionCode="1"
-    android:versionName="0.5.6">
+    android:versionCode="1">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="35" />
   <!-- WebView 访问 127.0.0.1 的本地 axum 服务也要 INTERNET -->

@@ -216,6 +216,17 @@ Linux 刻意不再装 `systemd --user` unit——两套并存时托盘取消勾�
 保留 ASCII 名（candle 没有 codepage 参数，改中文有编码风险），macOS `.app` 的
 `CFBundleDisplayName` 已改为「夸克网盘」。
 
+## Android 版本号防漂移（v0.5.8）
+
+`tools/verify-release.mjs` 在验 v0.5.7 的 8 个资产时发现 APK 的 `versionName`
+还是 `0.5.6`：根目录 `Cargo.toml` 已经升到 `0.5.7`，但 `AndroidManifest.xml`
+里手写的 `android:versionName` 忘了同步；`aapt2 link --version-name` 只在 manifest
+**没有**该属性时才注入，硬编码值把它静默盖掉了。v0.5.8 起 manifest 不再硬编码
+版本名，一律由 `android/tools/build-apk.sh` 从 `Cargo.toml` 读取并注入；CI 的
+`android-apk` 作业会反查 `aapt dump badging` 的 `versionName` 必须等于 `Cargo.toml`，
+`tools/verify-release.mjs` 也会拿它跟 Release tag 对一遍。以后升版本只需要改
+`Cargo.toml` 和 `android/Cargo.toml`（lock 由 cargo 同步），不会再漏掉 APK。
+
 ## 全盘搜索（v0.4.0）
 
 ![全盘搜索](screenshot-search.png)

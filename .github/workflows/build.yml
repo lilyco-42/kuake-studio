@@ -589,6 +589,13 @@ jobs:
           test -s "$apk"
           BT=$(ls -d "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"/build-tools/*/ | sort -V | tail -1)
           "$BT/aapt" dump badging "$apk" | grep -E "package:|sdkVersion|targetSdkVersion|application-label|native-code"
+          # versionName 必须等于 Cargo.toml 版本：manifest 不硬编码，靠 aapt2 link 注入，
+          # 这里在 CI 里反查一遍，防止再次出现「代码发了新版、包里还是旧版本号」的静默漂移。
+          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          test -n "$ver"
+          "$BT/aapt" dump badging "$apk" | grep -F "versionName='$ver'" >/dev/null \
+            || { echo "APK versionName 与 Cargo.toml 不一致（期望 $ver）" >&2; exit 1; }
+          echo "APK versionName=$ver 与 Cargo.toml 一致"
           "$BT/apksigner" verify --verbose --min-sdk-version 24 "$apk"
           unzip -l "$apk" | grep -E "AndroidManifest.xml|classes.dex|assets/dist.zip|lib/.*libkuake_studio_jni.so"
           # 两个 ABI 缺一不可（arm64 真机 + x86_64 模拟器）
