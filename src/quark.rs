@@ -1,7 +1,7 @@
 //! 自研夸克网盘 API 后端（不依赖本机 kuake CLI 子进程）。
 //!
-//! 这里只实现 kuake-studio 的 16 条网盘命令所覆盖的官方 HTTP 接口：
-//! 账号 / 列表 / 详情 / 增删改 / 分享 / 上传 / 下载 / 转存 / 全盘搜索。
+//! 这里只实现 kuake-studio 的网盘命令所覆盖的官方 HTTP 接口：
+//! 账号 / 列表 / 详情 / 增删改 / 分享 / 上传 / 下载 / 转存 / 全盘搜索 / 回收站。
 //! 返回值逐字复刻 kuake CLI 的 JSON 信封 {success,code,message,data}，
 //! 因此 src/apps.rs、前端、SSE、MCP、--schema 全都不需要改动。
 //!
@@ -919,6 +919,9 @@ pub fn dispatch(ctx: &Context, argv: &[String]) -> Result<Value, AppError> {
         "copy" => cmd_move_copy(&api, argv, "copy"),
         "rename" => cmd_rename(&api, argv),
         "delete" => cmd_delete(&api, argv),
+        "recycle-list" => cmd_recycle_list(&api, argv),
+        "recycle-restore" => cmd_recycle_action(&api, argv, false),
+        "recycle-purge" => cmd_recycle_action(&api, argv, true),
         "share" => cmd_share(&api, argv),
         "share-delete" => cmd_share_delete(&api, argv),
         "share-save" => cmd_share_save(&api, argv),
@@ -1256,6 +1259,116 @@ fn cmd_delete(api: &Api, argv: &[String]) -> Result<Value, AppError> {
     d.entry("fid".to_string())
         .or_insert_with(|| Value::String(fid));
     Ok(ok("删除成功", Value::Object(d)))
+}
+
+/// 回收站条目 → 前端直接可渲染的形状。
+///
+/// 回收站条目和普通列表项不是同一套字段：记录身份是 record_id（不是 fid），
+/// 删除时间在 move_recycle_at，30 天后会进「深度回收」。这里归一一次，
+/// 让 UI 不必认识夸克的原始键名。
+fn recycle_item(it: &Value) -> Value {
+    let mut remain_ms = as_i64(it.get("invisible_remain").unwrap_or(&Value::Null));
+    if remain_ms <= 0 {
+        remain_ms = as_i64(it.get("move_deep_recycle_at").unwrap_or(&Value::Null)) - now_ms();
+    }
+    let remain_ms = remain_ms.max(0);
+    // 夸克用 file_type==0 表示目录（普通列表里则是 dir 布尔）
+    let dir = as_i64(it.get("file_type").unwrap_or(&Value::Null)) == 0;
+    json!({
+        "record_id": as_str(it.get("record_id").unwrap_or(&Value::Null)),
+        "fid": as_str(it.get("fid").unwrap_or(&Value::Null)),
+        "file_name": decode_name(&as_str(it.get("file_name").unwrap_or(&Value::Null))),
+        "size": as_i64(it.get("size").unwrap_or(&Value::Null)),
+        "dir": dir,
+        "deleted_at": as_i64(it.get("move_recycle_at").unwrap_or(&Value::Null)),
+        "created_at": as_i64(it.get("created_at").unwrap_or(&Value::Null)),
+        "updated_at": as_i64(it.get("updated_at").unwrap_or(&Value::Null)),
+        "move_deep_recycle_at": as_i64(it.get("move_deep_recycle_at").unwrap_or(&Value::Null)),
+        "remain_ms": remain_ms,
+        // 还剩几天进深度回收；不足一天按一天算，0 表示已到期或后端没给
+        "remain_days": (remain_ms + 86_399_999) / 86_400_000,
+        "format_type": as_str(it.get("format_type").unwrap_or(&Value::Null)),
+        "file_source": as_str(it.get("file_source").unwrap_or(&Value::Null)),
+        "pdir_fid": as_str(it.get("pdir_fid").unwrap_or(&Value::Null)),
+    })
+}
+
+/// 回收站列表。这个接口**回 total**（/file/search 不回），所以前端能真翻页。
+fn cmd_recycle_list(api: &Api, argv: &[String]) -> Result<Value, AppError> {
+    let page = arg_num(opt(argv, 1), 1, 1, 1000, "page")?;
+    let size = arg_num(opt(argv, 2), 50, 1, 100, "size")?;
+    let extra: Vec<(&str, String)> = vec![
+        ("_page", page.to_string()),
+        ("_size", size.to_string()),
+        ("_fetch_total", "1".to_string()),
+    ];
+    let v = api.get("/1/clouddrive/file/recycle/list", &extra)?;
+    let data = data_of(&v)?;
+    let raw: Vec<Value> = data
+        .get("list")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let items: Vec<Value> = raw.iter().map(recycle_item).collect();
+    let total = as_i64(data.get("total").unwrap_or(&Value::Null));
+    let deep = as_i64(deep_get(&data, "deep_recycle_count").unwrap_or(&Value::Null));
+    // 有 total 就按 total 算；total 缺失时退化成「满页即可能还有下一页」。
+    let has_more = if total > 0 {
+        i64::from(page) * i64::from(size) < total
+    } else {
+        raw.len() as u32 >= size
+    };
+    Ok(ok(
+        "回收站列表",
+        json!({
+            "list": items,
+            "total": total,
+            "page": page,
+            "size": size,
+            "has_more": has_more,
+            "deep_recycle_count": deep,
+        }),
+    ))
+}
+
+/// 回收站的两个写操作：恢复（异步任务）与永久删除（同步返回 finish）。
+///
+/// body 只有一种合法形状：select_mode 2 + record_list 字符串数组。
+/// record_list 必须是**字符串数组**（传对象数组、或把字段名写成 filelist /
+/// record_list_str，一律 14001 Bad Parameter）；select_mode 必须是 2，
+/// 传 1 是「全部」语义（record_list 为空时会把整个回收站都恢复），绝不能当探针。
+fn cmd_recycle_action(api: &Api, argv: &[String], purge: bool) -> Result<Value, AppError> {
+    let records: Vec<String> = argv
+        .iter()
+        .skip(1)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if records.is_empty() {
+        return Err(AppError::InvalidArg("至少给一个 record_id".into()));
+    }
+    let n = records.len();
+    let (ep, label) = if purge {
+        ("/1/clouddrive/file/recycle/remove", "永久删除")
+    } else {
+        ("/1/clouddrive/file/recycle/recover", "恢复")
+    };
+    let v = api.post(ep, &[], json!({ "select_mode": 2, "record_list": records }))?;
+    let d = if purge {
+        data_of(&v)?
+    } else {
+        // 恢复是异步任务。注意 record_id 不存在时夸克照样回 code=0 + task_id，
+        // 只是任务永远到不了 status=2 —— 靠 wait_task 超时报错，而不是假装成功。
+        wait_task(api, &v, label)?
+    };
+    Ok(ok(
+        if purge {
+            "已永久删除"
+        } else {
+            "已恢复"
+        },
+        json!({ "count": n, "record_list": records, "result": d }),
+    ))
 }
 
 fn hex(bytes: &[u8]) -> String {

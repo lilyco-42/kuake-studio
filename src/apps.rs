@@ -216,6 +216,38 @@ fn run_share_list(app: &ShareList, ctx: &Context) -> Result<serde_json::Value, A
     finish(ctx, t, v)
 }
 
+/// 回收站列表（最近删除）
+#[derive(Debug, App)]
+#[app(
+    name = "recycle-list",
+    about = "回收站列表（最近删除，显示删除时间与剩余天数）",
+    run = "run_recycle_list"
+)]
+pub struct RecycleList {
+    #[arg(about = "页码，从 1 开始", default = 1, min = 1, max = 1000)]
+    pub page: u32,
+    #[arg(
+        about = "每页条数（夸克后端上限 100）",
+        default = 50,
+        min = 1,
+        max = 100
+    )]
+    pub size: u32,
+}
+
+fn run_recycle_list(app: &RecycleList, ctx: &Context) -> Result<serde_json::Value, AppError> {
+    let t = start();
+    let v = kuake::run(
+        ctx,
+        &[
+            "recycle-list".to_string(),
+            app.page.to_string(),
+            app.size.to_string(),
+        ],
+    )?;
+    finish(ctx, t, v)
+}
+
 // ── 需确认（T1） ───────────────────────────────────────────
 
 /// 新建文件夹
@@ -883,6 +915,72 @@ fn run_login(app: &Login, ctx: &Context) -> Result<serde_json::Value, AppError> 
     )
 }
 
+/// 从回收站恢复（可多个）
+#[derive(Debug, App)]
+#[app(
+    name = "recycle-restore",
+    about = "从回收站恢复到原目录（按 record_id，可多个）",
+    run = "run_recycle_restore",
+    safety = "t1"
+)]
+pub struct RecycleRestore {
+    #[arg(about = "回收站条目的 record_id（列表里复制），可多个")]
+    pub records: Vec<String>,
+}
+
+fn run_recycle_restore(app: &RecycleRestore, ctx: &Context) -> Result<serde_json::Value, AppError> {
+    let t = start();
+    let records = clean_ids(&app.records);
+    if records.is_empty() {
+        return Err(AppError::InvalidArg("至少给一个 record_id".into()));
+    }
+    let v = kuake::run(
+        ctx,
+        &["recycle-restore".to_string()]
+            .into_iter()
+            .chain(records)
+            .collect::<Vec<_>>(),
+    )?;
+    finish(ctx, t, v)
+}
+
+/// 永久删除回收站条目（不可恢复）
+#[derive(Debug, App)]
+#[app(
+    name = "recycle-purge",
+    about = "永久删除回收站里的条目（不可恢复，按 record_id，可多个）",
+    run = "run_recycle_purge",
+    safety = "t1"
+)]
+pub struct RecyclePurge {
+    #[arg(about = "回收站条目的 record_id（列表里复制），可多个")]
+    pub records: Vec<String>,
+}
+
+fn run_recycle_purge(app: &RecyclePurge, ctx: &Context) -> Result<serde_json::Value, AppError> {
+    let t = start();
+    let records = clean_ids(&app.records);
+    if records.is_empty() {
+        return Err(AppError::InvalidArg("至少给一个 record_id".into()));
+    }
+    let v = kuake::run(
+        ctx,
+        &["recycle-purge".to_string()]
+            .into_iter()
+            .chain(records)
+            .collect::<Vec<_>>(),
+    )?;
+    finish(ctx, t, v)
+}
+
+/// 前端「每行一个」的 Textarea 会带进空行与首尾空格，统一清一遍再做非空校验。
+fn clean_ids(raw: &[String]) -> Vec<String> {
+    raw.iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 /// 全部命令（顺序即 UI 里的呈现顺序）
 pub fn commands() -> Vec<lilyco::__core::registry::RegisteredCommand> {
     vec![
@@ -893,6 +991,7 @@ pub fn commands() -> Vec<lilyco::__core::registry::RegisteredCommand> {
         RegisteredCommand::from_app::<Version>(),
         RegisteredCommand::from_app::<Download>(),
         RegisteredCommand::from_app::<ShareList>(),
+        RegisteredCommand::from_app::<RecycleList>(),
         RegisteredCommand::from_app::<CreateFolder>(),
         RegisteredCommand::from_app::<Upload>(),
         RegisteredCommand::from_app::<Move>(),
@@ -902,6 +1001,8 @@ pub fn commands() -> Vec<lilyco::__core::registry::RegisteredCommand> {
         RegisteredCommand::from_app::<Share>(),
         RegisteredCommand::from_app::<ShareDelete>(),
         RegisteredCommand::from_app::<ShareSave>(),
+        RegisteredCommand::from_app::<RecycleRestore>(),
+        RegisteredCommand::from_app::<RecyclePurge>(),
         RegisteredCommand::from_app::<EncryptLocal>(),
         RegisteredCommand::from_app::<DecryptLocal>(),
         RegisteredCommand::from_app::<Login>(),
@@ -940,6 +1041,56 @@ mod tests {
         assert_eq!(s.args[1].default.as_ref().unwrap(), &serde_json::json!(1));
         assert_eq!(s.args[2].name, "size");
         assert_eq!(s.args[2].default.as_ref().unwrap(), &serde_json::json!(50));
+    }
+
+    #[test]
+    fn recycle_schema_defaults_and_safety() {
+        // 只读的列表页：分页有默认值（HTTP/MCP/FFI 宿主靠 schema default 兜底），且不是 T1。
+        let list = <RecycleList as App>::schema();
+        assert_eq!(list.name, "recycle-list");
+        assert_eq!(list.args.len(), 2);
+        assert_eq!(list.args[0].name, "page");
+        assert_eq!(
+            list.args[0].default.as_ref().unwrap(),
+            &serde_json::json!(1)
+        );
+        assert_eq!(list.args[1].name, "size");
+        assert_eq!(
+            list.args[1].default.as_ref().unwrap(),
+            &serde_json::json!(50)
+        );
+        assert!(matches!(
+            list.safety,
+            lilyco::__core::safety::SafetyTier::ReadOnly
+        ));
+
+        // 两个写操作：record_id 是列表（前端渲染成每行一个），且必须走确认。
+        let restore = <RecycleRestore as App>::schema();
+        assert_eq!(restore.args.len(), 1);
+        assert_eq!(restore.args[0].name, "records");
+        assert!(matches!(
+            restore.args[0].kind,
+            lilyco::__core::schema::ArgKind::List { .. }
+        ));
+        assert!(!matches!(
+            restore.safety,
+            lilyco::__core::safety::SafetyTier::ReadOnly
+        ));
+        assert!(!matches!(
+            <RecyclePurge as App>::schema().safety,
+            lilyco::__core::safety::SafetyTier::ReadOnly
+        ));
+    }
+
+    #[test]
+    fn clean_ids_drops_blanks_and_trims() {
+        let got = clean_ids(&[
+            "  a  ".to_string(),
+            String::new(),
+            "   ".to_string(),
+            "b".to_string(),
+        ]);
+        assert_eq!(got, vec!["a".to_string(), "b".to_string()]);
     }
 
     #[test]

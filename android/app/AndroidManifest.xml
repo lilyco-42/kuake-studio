@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="dev.lilyco.kuakestudio"
     android:versionCode="1"
-    android:versionName="0.5.4">
+    android:versionName="0.5.5">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="35" />
   <!-- WebView 访问 127.0.0.1 的本地 axum 服务也要 INTERNET -->

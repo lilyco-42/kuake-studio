@@ -72,7 +72,7 @@ Linux 的 `./install.sh` 把程序装到 `~/.local/opt/kuake-studio`、注册一
 **App 进程内**（`127.0.0.1`），UI 交给 WebView，所以用户看到的是同一个界面、同一套命令。
 
 iOS / 鸿蒙以及 `*-android-arm64.tar.gz` 这三个是**进程内 FFI 原生库**，不是可安装的 App、
-没有应用商店签名：同一套 lilyco Registry / 19 条命令 / 前端 `dist/` 全部复用，只是不启 HTTP、
+没有应用商店签名：同一套 lilyco Registry / 22 条命令 / 前端 `dist/` 全部复用，只是不启 HTTP、
 不开浏览器、不生成一次性令牌，宿主在进程内直接调 C ABI。
 
 宿主接法（`include/kuake_studio.h`，6 个函数，全部 UTF-8 / NULL 安全）：
@@ -81,7 +81,7 @@ iOS / 鸿蒙以及 `*-android-arm64.tar.gz` 这三个是**进程内 FFI 原生�
 #include "kuake_studio.h"
 
 kuake_studio_set_cookie(cookie_utf8);        // 1) 启动后先注入凭据，成功返回 0
-char *schemas = kuake_studio_schemas();      // 2) 19 条命令的 JSON schema 数组
+char *schemas = kuake_studio_schemas();      // 2) 22 条命令的 JSON schema 数组
 char *out = kuake_studio_call("user", "{}"); // 3) 同步执行，返回标准信封
 kuake_studio_free(out);
 kuake_studio_free(schemas);
@@ -163,7 +163,7 @@ KUAKE_STUDIO_APK_DEBUGGABLE=1 ./android/tools/build-apk.sh   # → pkg/kuake-stu
 KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 kuake 子进程
 ./run.sh --cli search --q README --json        # 全盘搜索文件名（仅内置原生后端）
 ./run.sh --mcp                                  # 以 MCP server 暴露给 AI
-./run.sh --schema                               # 打印 19 个命令的 JSON Schema
+./run.sh --schema                               # 打印 22 个命令的 JSON Schema
 ./run.sh --cli list --openai-tool               # 顺便白送 OpenAI/Anthropic/Gemini tool 定义
 ```
 
@@ -174,11 +174,13 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 | 文件 | 目录浏览、面包屑/历史栈、排序（名称/时间/大小）、新建文件夹、上传（可选**上传前加密**）、重命名、移动、复制、删除、详情、下载、**解密到本机**、创建分享 |
 | 搜索 | **全盘按文件名搜索**、命中高亮、完整路径反查、复制路径、跳到所在目录、分页加载（v0.4.0） |
 | 分享 | 我的分享列表（有效期/浏览/转存）、复制链接、浏览器打开、取消分享、转存他人分享 |
+| 回收站 | 最近删除列表（删除时间/剩余天数）、勾选后**批量恢复**、**永久删除**、分页加载（v0.5.5） |
 | 账号 | 昵称、会员类型与到期、容量占用进度、网盘后端类型与版本、**扫码登录**（一键刷新凭据） |
 | 活动日志 | 每次调用的实时进度/耗时/错误，可折叠、可清空 |
 
-19 个命令：`list` `info` `search` `user` `version` `download` `share-list` `create` `upload` `move`
-`copy` `rename` `delete` `share` `share-delete` `share-save` `encrypt` `decrypt` `login`。
+22 个命令：`list` `info` `search` `user` `version` `download` `share-list` `recycle-list` `create` `upload`
+`move` `copy` `rename` `delete` `share` `share-delete` `share-save` `recycle-restore`
+`recycle-purge` `encrypt` `decrypt` `login`。
 
 **宿主一致性（v0.5.2）**：`#[arg(default = …)]` 写在 schema 里，但除 CLI 外
 （clap 会填默认），Web/SSE、MCP、FFI 和嵌入方都是把调用方的 `args` JSON 直接交给
@@ -213,6 +215,38 @@ handler。`build_registry()` 现在统一在注册前按 schema 补齐**缺失�
 > 因此 `KUAKE_STUDIO_BACKEND=cli` 回退模式下会明确报「仅内置原生后端可用」，
 > 侧栏「搜索」也会禁用；不会伪造一个假的搜索结果。
 
+## 回收站（v0.5.5）
+
+![回收站](screenshot-recycle.png)
+
+「回收站」页列出最近删除的条目，可以勾选后**批量恢复**或**永久删除**：
+
+```bash
+./run.sh --cli recycle-list --json                       # 第一页 50 条
+./run.sh --cli recycle-list --page 2 --size 100 --json
+./run.sh --cli recycle-restore --records <record_id> [--records <record_id> ...]
+./run.sh --cli recycle-purge   --records <record_id>
+```
+
+- 三个端点都是在真账号上实测出来的：`GET /1/clouddrive/file/recycle/list`、
+  `POST /1/clouddrive/file/recycle/recover`（恢复）、`POST /1/clouddrive/file/recycle/remove`（永久删除）。
+  前者的 `data` 里**有 `total`**（比 `/file/search` 强），所以回收站能真分页，
+  另外还带 `deep_recycle_stat.deep_recycle_count`；列表页把它显示成「深度回收站还有 N 项」。
+- `record_list` 必须是**字符串数组**（`[record_id, …]`）。传对象数组、传 JSON 字符串、
+  或把字段写成 `filelist` / 多带一个 `record_list_str`，后端一律回 `14001 Bad Parameter`。
+- 恢复是**异步任务**（`recover` 只回 `task_id`），客户端会轮询 `/1/clouddrive/task`
+  到 `status==2` 才报成功；永久删除是同步的（`data.finish` 直接为 `true`）。
+- `select_mode` 必须写死 `2`（按 `record_list` 指定条目）。**`select_mode=1` 是「全部」语义** ——
+  传 `{select_mode:1, record_list:[]}` 会把整个回收站的内容全恢复，绝不能拿它当探针。
+- 恢复**不存在的 record_id** 也回 `code=0` + 一个永远不完成的 `task_id`，所以客户端不靠
+  `code=0` 判定成功，只看 `wait_task` 的轮询结果（超时就报错，不会假装恢复成功）。
+- 条目自带 `move_recycle_at`（删除时间）与 `move_deep_recycle_at`（进深度回收站的时间，
+  恒为前者 + 30 天），`invisible_remain` 是剩余毫秒。客户端换算成「还剩 N 天」，
+  **≤3 天标红**；不足一天按一天算，不会出现「还剩 0 天但还能点」的歧义。
+- `recycle-restore` / `recycle-purge` 是 `safety="t1"`（写操作），Web 端走确认对话框；
+  `recycle-list` 是 T0 只读。`records` 在 schema 里是 `list` 类型，
+  前端 `SchemaForm` 渲染成「每行一个」的文本框，空行会被剔掉。
+
 ## 架构
 
 ```
@@ -225,7 +259,7 @@ handler。`build_registry()` 现在统一在注册前按 schema 补齐**缺失�
    ▼
 axum 0.8 (127.0.0.1 only, 回环 Host/Origin 校验 + 常量时间令牌)
    ▼
-lilyco Registry (19 个 #[derive(App)] 命令, SafetyTier T0 只读 / T1 需确认)
+lilyco Registry (22 个 #[derive(App)] 命令, SafetyTier T0 只读 / T1 需确认)
    ▼
 内置原生夸克 API（src/quark.rs：reqwest 直连官方 HTTP；cookie 来自 .env）
    └─ 可选 KUAKE_STUDIO_BACKEND=cli → kuake CLI 子进程（argv 数组、可取消、900s 超时）
@@ -236,7 +270,7 @@ iOS / 鸿蒙走进程内 FFI（见[六平台支持矩阵](#六平台支持矩阵
 宿主直接调 `src/ffi.rs` 的 C ABI → `src/lib.rs` 的 `call()` → 同一个 lilyco Registry，
 跳过 axum / SSE / 一次性令牌，命令与 schema 完全一致。
 
-关键点：**界面不是手写 19 套表单**。后端 `GET /api/schema` 把 lilyco 每个命令的
+关键点：**界面不是手写 22 套表单**。后端 `GET /api/schema` 把 lilyco 每个命令的
 `CommandSchema`（参数名/类型/枚举/范围/必填/默认值）交给前端，前端用一套
 `SchemaForm` 渲染出对应控件，`CommandDialog` 提交时只发送 schema 声明过的键。
 加命令只需要在 `src/apps.rs` 里加一个 struct。
@@ -245,11 +279,12 @@ iOS / 鸿蒙走进程内 FFI（见[六平台支持矩阵](#六平台支持矩阵
 
 从 v0.2.0 起，所有网盘命令都由 `src/quark.rs` 直接调夸克官方 HTTP 接口实现，
 **不再 fork 本机 `kuake` 进程**；`encrypt` / `decrypt` 仍是纯本机命令。
-v0.3.0 新增第 18 条 `login`（扫码登录，见下章）；v0.4.0 新增第 19 条 `search`
-（全盘搜索，见下章），网盘命令变成 16 条。
+v0.3.0 新增第 18 条 `login`（扫码登录，见下章）；v0.4.0 新增第 19 条 `search`（全盘搜索）；
+v0.5.5 新增 `recycle-list` / `recycle-restore` / `recycle-purge` 三条回收站命令，
+网盘命令变成 19 条、总共 22 条。
 
 - 覆盖：账号 / 列目录 / 详情 / 新建 / 重命名 / 移动 / 复制 / 删除 / 上传 / 下载 /
-  分享（创建、列表、删除、转存）/ 全盘搜索。返回体逐字复刻 kuake CLI 的
+  分享（创建、列表、删除、转存）/ 全盘搜索 / 回收站（列表、恢复、永久删除）。返回体逐字复刻 kuake CLI 的
   `{success,code,message,data}` 信封，所以前端、SSE、MCP、`--schema` 全都复用同一套协议。
 - 登录态用 `KUAKE_COOKIE`（或 `KUAKE_PUS` + `KUAKE_PUUS`），存在
   `~/.config/kuake/.env`；**v0.3.0 起首选「账号 → 扫码登录」自动写入**，无需手抄。
@@ -288,7 +323,7 @@ v0.3.0 新增第 18 条 `login`（扫码登录，见下章）；v0.4.0 新增第
    `.env.bak-<epoch>`、写回 `KUAKE_COOKIE='...'`，并 `set_var` 让当前进程立刻生效。
 4. 对话框只显示昵称 / cookie 长度 / cookie 名 / 目标路径，**cookie 本身不进返回体、不进日志**。
 
-CLI / MCP 也能跑第 18 条命令 `login`（默认等 300 秒，可 `--timeout 10..900`）：它会把二维码 SVG
+CLI / MCP 也能跑 `login` 命令（默认等 300 秒，可 `--timeout 10..900`）：它会把二维码 SVG
 写到临时目录并打印路径与扫码 URL。Web 端是 `POST /api/login/start` → 轮询 `GET /api/login/status/{sid}`
 → 可 `POST /api/login/cancel/{sid}` 取消；POST 全在回环令牌闸后面。
 
@@ -410,7 +445,7 @@ cd ~/code/kuake-studio/tools
 1. `check`：`cargo fmt --check` + `clippy -D warnings` + `cargo test`（含 `--no-default-features --lib`）
    + **C ABI 端到端自检**（真链接 `libkuake_studio.a` 跑 `tools/abi-selftest.c`，15 个断言，Ubuntu）。
 2. `package`：六条并行。桌面三条先 `bun install --frozen-lockfile` → `tsc --noEmit` →
-   `vite build` → `cargo build --release`，再自检 `--schema`（19 条）与 `/api/boot`：
+   `vite build` → `cargo build --release`，再自检 `--schema`（22 条）与 `/api/boot`：
    - **windows-x64**：便携 `.zip` + WiX v3 的 `.msi`（exe 图标/版本信息由 `build.rs` + `embed-resource` 编进去）。
    - **linux-x64**：`tar.gz`（含 `start.sh`、`.desktop`、png 图标）。
    - **macos-universal**：分别编 arm64 / x86_64 再 `lipo` 合成，出 `tar.gz` + 带 icns 的 `.app`。
@@ -451,8 +486,8 @@ cd ~/code/kuake-studio/tools
 node tools/verify-release.mjs
 
 # 指定 tag / 指定缓存目录 / 机器可读输出
-node tools/verify-release.mjs --tag v0.5.4 --json
-node tools/verify-release.mjs --tag v0.5.4 --dir /tmp/ks-verify --no-download
+node tools/verify-release.mjs --tag v0.5.5 --json
+node tools/verify-release.mjs --tag v0.5.5 --dir /tmp/ks-verify --no-download
 ```
 
 检查项：资产齐全（Windows 2 + Linux / macOS / **Android APK** / Android 静态库 / iOS / 鸿蒙各 1 = 8）、非草稿、
@@ -557,6 +592,23 @@ v0.5.4 的发布包也复验过同一件事：直接从 Release 下载的 `kuake
 - `.env` 就位 → 冷启动跑 `user` → `nickname=lilyco42`
 - 把 `.env` 移走再冷启动 → `user` → 「未找到夸克登录凭据」（预期失败面，证明确实是读文件生效，不是残留状态）
 
+## 实测记录：回收站端到端（v0.5.5）
+
+在真实账号上用 8787 的 HTTP/SSE 通道跑完一整轮（每条命令都只有 1 个终态事件）：
+
+| 步骤 | 命令 | 结果 |
+| --- | --- | --- |
+| 造目标 | `create {name, pdir:/06_待整理}` | `fid=65174d14…` |
+| 删进回收站 | `delete {path:/06_待整理/__ks_rcy_e2e__}` | 删除成功（异步任务轮询到 `status==2`） |
+| 列表 | `recycle-list` | 找到该项，`dir=true`、`remain_days=30`、`total=2` |
+| 恢复 | `recycle-restore {records:[record_id]}` | `success`、`count=1`，随后 `info` 拿回同一个 fid |
+| 再删 + 永久删 | `recycle-purge {records:[record_id]}` | `success`、`count=1`，`data.finish=true` |
+| 收尾核对 | `recycle-list` | `total` 回到 1，该条消失 |
+
+前端用 `chromium --headless --dump-dom http://127.0.0.1:8787/#recycle` 抓 DOM 复核渲染：
+4 条条目、每条一个 checkbox（全选栏 +1）、每行都有「还剩 30 天」徽标、页头「共 4 项 · 深度回收站还有 9 项」。
+探针用的临时目录全部走「create → delete → purge」清干净，回收站里不留测试残留。
+
 ## 目录
 
 ```
@@ -564,7 +616,7 @@ src/main.rs       桌面入口：--cli / --mcp / --schema / 默认 Web（仅 des
 src/lib.rs        核心库：build_registry() / call() / set_cookie()（六平台共用，不依赖 axum）
 src/ffi.rs        C ABI：version/boot/schemas/set_cookie/call/free（catch_unwind 兜底）
 include/kuake_studio.h   C 头文件：宿主 App 接入的 6 个函数与约定
-src/apps.rs       19 个 #[derive(App)] 命令（lilyco 派生宏）
+src/apps.rs       22 个 #[derive(App)] 命令（lilyco 派生宏）
 src/crypt.rs      .kcrypt 容器：AES-256-GCM 分块 + PBKDF2-SHA256 派生密钥
 src/quark.rs      自研夸克 API：reqwest 直连官方接口，复刻 CLI 信封（默认后端）
 src/login.rs      夸克扫码登录：cookie jar / QR SVG / service_ticket 换 cookie / 校验昵称 / 备份写 .env
@@ -584,7 +636,7 @@ tools/verify-release.mjs  一条命令核对 Release 8 资产的 SHA256 / 解包
 android/          Android APK 宿主工程：Cargo.toml（cdylib）/ src/lib.rs（JNI）/ app/（Manifest + Java + 图标）
 android/tools/build-jni.sh  交叉编 libkuake_studio_jni.so（arm64-v8a / x86_64，NDK）
 android/tools/build-apk.sh  纯命令行出签名 APK（aapt2 + javac + d8 + zipalign + apksigner，不需要 Gradle）
-frontend/src/components/ui/   shadcn/ui 组件（基于 radix-ui 聚合包手写）
-frontend/src/components/      schema-form / command-dialog / login-dialog / 文件表格 / 控制台
+frontend/src/components/ui/   shadcn/ui 组件（基于 radix-ui 聚合包手写，含 checkbox）
+frontend/src/components/      schema-form / command-dialog / login-dialog / 文件表格 / 回收站 / 控制台
 frontend/src/lib/             api / store / types / format
 ```

@@ -89,6 +89,33 @@ export interface KuakeShare {
   first_file?: { file_name?: string; dir?: boolean; size?: number };
 }
 
+/** 回收站条目：quark.rs 的 recycle_item() 归一后的形状 */
+export interface RecycleItem {
+  record_id: string;
+  fid: string;
+  file_name: string;
+  size: number;
+  dir: boolean;
+  deleted_at: number;
+  created_at: number;
+  updated_at: number;
+  move_deep_recycle_at: number;
+  remain_ms: number;
+  remain_days: number;
+  format_type: string;
+  file_source: string;
+  pdir_fid: string;
+}
+
+export interface RecycleData {
+  list: RecycleItem[];
+  total: number;
+  page: number;
+  size: number;
+  has_more: boolean;
+  deep_recycle_count: number;
+}
+
 /** SSE 事件（lilyco-core::progress） */
 export type RunEvent =
   | { type: "started"; total: number | null; message: string | null }

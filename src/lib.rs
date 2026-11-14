@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn registry_has_all_commands() {
         let n = build_registry().to_json().as_array().unwrap().len();
-        assert_eq!(n, 19, "命令数应当与 --schema 自检一致");
+        assert_eq!(n, 22, "命令数应当与 --schema 自检一致");
     }
 
     #[test]

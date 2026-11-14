@@ -1,10 +1,22 @@
 import * as React from "react";
-import { Cloud, FolderTree, Info, Link2, Loader2, Moon, Sun, Search as SearchIcon, User } from "lucide-react";
+import {
+  Cloud,
+  FolderTree,
+  Info,
+  Link2,
+  Loader2,
+  Moon,
+  Search as SearchIcon,
+  Trash2,
+  Sun,
+  User,
+} from "lucide-react";
 
 import { ConsolePanel } from "@/components/console-panel";
 import { AccountView } from "@/components/views/account-view";
 import { FilesView } from "@/components/views/files-view";
 import { SearchView } from "@/components/views/search-view";
+import { RecycleView } from "@/components/views/recycle-view";
 import { SharesView } from "@/components/views/shares-view";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,17 +24,18 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useRunner } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
-type Tab = "files" | "search" | "shares" | "account";
+type Tab = "files" | "search" | "shares" | "recycle" | "account";
 
 function readHash(): Tab {
   const h = location.hash.replace(/^#/, "");
-  return h === "search" || h === "shares" || h === "account" ? h : "files";
+  return h === "search" || h === "shares" || h === "recycle" || h === "account" ? h : "files";
 }
 
 const NAV: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "files", label: "文件", icon: FolderTree },
   { id: "search", label: "搜索", icon: SearchIcon },
   { id: "shares", label: "分享", icon: Link2 },
+  { id: "recycle", label: "回收站", icon: Trash2 },
   { id: "account", label: "账号", icon: User },
 ];
 
@@ -69,6 +82,8 @@ export default function App() {
   const hasShares = schemas.some((s) => s.name === "share-list");
   // cli 回退模式下真 kuake 没有 search，侧栏直接禁用而不是让用户撞一鼻子错误
   const hasSearch = info?.backend !== "cli";
+  // 回收站同样只在原生后端有（cli 回退模式没有 recycle-* 命令）
+  const hasRecycle = schemas.some((s) => s.name === "recycle-list");
 
   if (bootError) {
     return (
@@ -120,13 +135,21 @@ export default function App() {
               const Icon = n.icon;
               const active = tab === n.id;
               const disabled =
-                (n.id === "shares" && !hasShares) || (n.id === "search" && !hasSearch);
+                (n.id === "shares" && !hasShares) ||
+                (n.id === "search" && !hasSearch) ||
+                (n.id === "recycle" && !hasRecycle);
               return (
                 <button
                   key={n.id}
                   disabled={disabled}
                   onClick={() => setTab(n.id)}
-                  title={n.id === "search" && !hasSearch ? "搜索仅在内置原生后端可用" : n.label}
+                  title={
+                    n.id === "search" && !hasSearch
+                      ? "搜索仅在内置原生后端可用"
+                      : n.id === "recycle" && !hasRecycle
+                        ? "回收站仅在内置原生后端可用"
+                        : n.label
+                  }
                   className={cn(
                     "flex items-center gap-2.5 rounded-md px-2 py-2 text-sm transition-colors",
                     "justify-center md:justify-start",
@@ -200,6 +223,8 @@ export default function App() {
             <SearchView onOpenDir={openDir} />
           ) : tab === "shares" ? (
             <SharesView schemas={schemas} />
+          ) : tab === "recycle" ? (
+            <RecycleView />
           ) : (
             <AccountView />
           )}
