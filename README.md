@@ -451,8 +451,8 @@ cd ~/code/kuake-studio/tools
 node tools/verify-release.mjs
 
 # 指定 tag / 指定缓存目录 / 机器可读输出
-node tools/verify-release.mjs --tag v0.5.3 --json
-node tools/verify-release.mjs --tag v0.5.3 --dir /tmp/ks-verify --no-download
+node tools/verify-release.mjs --tag v0.5.4 --json
+node tools/verify-release.mjs --tag v0.5.4 --dir /tmp/ks-verify --no-download
 ```
 
 检查项：资产齐全（Windows 2 + Linux / macOS / **Android APK** / Android 静态库 / iOS / 鸿蒙各 1 = 8）、非草稿、
@@ -463,6 +463,7 @@ x86_64 + arm64，`Info.plist` 的 `CFBundleVersion` 等于 tag 版本）、nativ
 （Android / 鸿蒙全 ELF aarch64、iOS 全 Mach-O arm64），以及 6 个 `kuake_studio_*`
 导出符号。APK 另有专项：含 `AndroidManifest.xml` / `classes.dex` / `assets/dist.zip`、
 `lib/` 下同时有 `arm64-v8a` 与 `x86_64` 的 `libkuake_studio_jni.so`（且是 Stored 未压缩）、
+`aapt2 dump badging` 的 `versionName` 等于 tag 版本（防止「代码发新版、包里还是旧版本号」的静默漂移）、
 有 `apksigner` 时再验 v2/v3 签名（注意它跑在 ASCII cwd 下，否则中文目录会让 JVM 抛
 `InvalidPathException` 而报假失败）。iOS 包另有一道文案护栏：`README-native.md` 不得混入 Android / 鸿蒙专用的
 `zig` / `AR_aarch64_linux_android` 复现说明（v0.5.1 修）。
@@ -549,6 +550,12 @@ v0.5.4 之前 Android 宿主绕过了这一步，A/B 实测复现过：把 `.env
 - 已修复：`user` 返回 `nickname=lilyco42 / SUPER_VIP`（`CREDS_RESTORED: true`）
 
 `src/login.rs` 里的 `env_roundtrips_so_relaunch_keeps_login` 钉住写盘格式与读回去引号逻辑的往返一致。
+
+v0.5.4 的发布包也复验过同一件事：直接从 Release 下载的 `kuake-studio-0.5.4-android.apk` 里取出两个
+`.so`，原样塞回构建目录打成可调试包（保证跑的是发布产物里的字节），装进模拟器后
+
+- `.env` 就位 → 冷启动跑 `user` → `nickname=lilyco42`
+- 把 `.env` 移走再冷启动 → `user` → 「未找到夸克登录凭据」（预期失败面，证明确实是读文件生效，不是残留状态）
 
 ## 目录
 

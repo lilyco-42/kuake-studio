@@ -72,6 +72,19 @@ function walk(root) {
 }
 function find(files, pred) { const f = files.find(pred); return f ? f.abs : null; }
 
+// 在 PATH / Android SDK build-tools 里找一个命令行工具（apksigner / aapt2 / aapt）。
+// CI 里有 SDK、开发机可能没有；找不到就由调用方跳过该检查。
+function buildTool(name) {
+  const v = run('sh', ['-c', 'command -v ' + name]);
+  if (v.status === 0 && v.out.trim()) return name;
+  const sdk = process.env.ANDROID_SDK_ROOT || process.env.ANDROID_HOME
+    || path.join(home, 'Android', 'Sdk');
+  const bt = run('sh', ['-c', 'ls -d ' + sdk + '/build-tools/*/ 2>/dev/null | sort -V | tail -1']).out.trim();
+  if (!bt) return null;
+  const cand = path.join(bt, name);
+  return fs.existsSync(cand) ? cand : null;
+}
+
 // ── 取 Release 元数据（含 digest）─────────────────────────────────────────
 let tag = opt('--tag', null);
 let tagErr = '';
@@ -242,15 +255,19 @@ for (const a of apkAssets) {
 
   // 有 apksigner 就验签；没有就只提示（CI 里有 SDK，开发机可能没有）。
   // 先看 PATH，再回退到 ANDROID_SDK_ROOT / ~/Android/Sdk 的 build-tools。
-  let signer = 'apksigner';
-  if (run('sh', ['-c', 'command -v apksigner']).status !== 0) {
-    const sdk = process.env.ANDROID_SDK_ROOT || process.env.ANDROID_HOME
-      || path.join(home, 'Android', 'Sdk');
-    const bt = run('sh', ['-c', 'ls -d ' + sdk + '/build-tools/*/ 2>/dev/null | sort -V | tail -1']).out.trim();
-    if (bt && fs.existsSync(path.join(bt, 'apksigner'))) signer = path.join(bt, 'apksigner');
+  // 版本号：APK 的 versionName 是打包时从 Cargo.toml 读的，最容易出现
+  // 「代码发了新版、包里还是旧版本号」这种静默漂移，所以跟 tag 对一遍。
+  const aapt = buildTool('aapt2') || buildTool('aapt');
+  if (aapt) {
+    const bg = run(aapt, ['dump', 'badging', file]);
+    const mv = /versionName='([^']*)'/.exec(bg.out);
+    ck('APK versionName = ' + version, !!mv && mv[1] === version,
+       mv ? 'versionName=' + mv[1] : '未读到 versionName');
+  } else {
+    ck('APK versionName（本机无 aapt，跳过）', true, '未安装 aapt2 / aapt');
   }
-  const hasSigner = fs.existsSync(signer) || run('sh', ['-c', 'command -v ' + signer]).status === 0;
-  if (hasSigner) {
+  const signer = buildTool('apksigner');
+  if (signer) {
     // cwd 必须是纯 ASCII：apksigner 是 JVM 程序，会把 cwd 当 user.dir 去 encode，
     // 在中文目录（如 ~/文档/...）下会抛 InvalidPathException 而报假失败。
     const v = run(signer, ['verify', '--verbose', '--min-sdk-version', '24', file], { cwd: dir });
