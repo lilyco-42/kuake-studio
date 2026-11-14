@@ -71,6 +71,44 @@ jobs:
           cc -std=c11 -Wall -Wextra -I include -o /tmp/ks-abi-selftest tools/abi-selftest.c target/debug/libkuake_studio.a -lpthread -ldl -lm
           /tmp/ks-abi-selftest
 
+      # Linux 安装器：语法 + 旧 systemd --user 登录项清理（v0.5.2–0.5.6 升级路径）
+      # 用假 HOME + 假 systemctl：不碰 runner 的真实用户总线，也不改全局状态。
+      - name: Linux 安装器自检
+        run: |
+          set -euo pipefail
+          bash -n tools/install-linux-desktop.sh
+          export d="$(mktemp -d)"
+          trap 'rm -rf "$d"' EXIT
+          mkdir -p "$d/bin" "$d/home/.config/systemd/user/default.target.wants"
+          cp tools/install-linux-desktop.sh "$d/bin/kuake-studio-install.sh"
+          cat > "$d/bin/systemctl" <<'EOS'
+          #!/usr/bin/env bash
+          # 记录调用，假装成功；真的 systemctl 在这里不可用也不该被调用
+          printf '%s\n' "$*" >> "$d/log"
+          exit 0
+          EOS
+          chmod +x "$d/bin/systemctl"
+          cat > "$d/home/.config/systemd/user/kuake-studio.service" <<'EOS'
+          [Unit]
+          Description=legacy kuake-studio
+          [Service]
+          ExecStart=/bin/true
+          EOS
+          ln -s ../kuake-studio.service "$d/home/.config/systemd/user/default.target.wants/kuake-studio.service"
+          export HOME="$d/home" XDG_CONFIG_HOME="$d/home/.config" PATH="$d/bin:$PATH"
+          # --cleanup-legacy-only 不装程序、不碰 XDG 登录项，可在 CI 里安全跑
+          out="$(bash "$d/bin/kuake-studio-install.sh" --cleanup-legacy-only 2>&1)"
+          echo "$out"
+          test ! -e "$d/home/.config/systemd/user/kuake-studio.service"
+          test ! -e "$d/home/.config/systemd/user/default.target.wants/kuake-studio.service"
+          grep -q "disable --now kuake-studio.service" "$d/log"
+          grep -q "daemon-reload" "$d/log"
+          grep -q "已清理旧版" <<<"$out"
+          # 幂等：再跑一次不报错、不误报清理
+          out2="$(bash "$d/bin/kuake-studio-install.sh" --cleanup-legacy-only 2>&1)"
+          grep -q "没有发现旧版" <<<"$out2"
+          echo "installer cleanup OK"
+
   # ── 各平台打包 ───────────────────────────────────────────────────────
   package:
     name: ${{ matrix.name }}
@@ -641,6 +679,7 @@ jobs:
             printf '%s\n' \
               '- Windows：`kuake-studio-*-windows-x64.zip`（解压即用）/ `*.msi`（安装包）' \
               '- Linux：`kuake-studio-*-linux-x64.tar.gz` 解压后运行一次 `./install.sh`（桌面图标 + 开机自启，双击即用）' \
+              '- Linux 升级：v0.5.2–0.5.6 装过的旧 `systemd --user` 登录项由 `./install.sh` 自动清理，开机自启只留托盘勾选框控制的那一份' \
               '- macOS：`kuake-studio-*-macos-universal.tar.gz` 或解压出的 `kuake-studio.app`（未签名，首次打开需右键 → 打开）' \
               '- Android：`kuake-studio-*-android.apk` 直接装（arm64 真机 + x86_64 模拟器同一份，debug 签名）' \
               '' \

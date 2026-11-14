@@ -47,6 +47,10 @@ Linux 的 `./install.sh` 把程序装到 `~/.local/opt/kuake-studio`，生成桌
 图标与应用菜单项，并写一份 XDG 登录项 `~/.config/autostart/kuake-studio.desktop`
 作为**开机自启的唯一真源**（托盘菜单「开机自启」勾选框读写的就是这个文件，
 不再额外装 `systemd --user` 服务）。`open.sh` 会在服务没起时先拉起再开浏览器。
+**从 v0.5.2–v0.5.6 升级**：那几个版本装过 `systemd --user` 登录项，安装器会自动
+`disable --now`、删 unit 并 `daemon-reload`，保证「关掉自启」不是假动作；也可以单独跑
+`./install.sh --cleanup-legacy-only` 只清旧登录项（不动程序与现有的 XDG 登录项）。
+无 systemd / 用户总线（容器、CI）时只删文件，不会让安装失败。
 服务只监听 `127.0.0.1:8787`，局域网内其他机器访问不到；卸载脚本只删程序与入口，
 不动凭据和已下载的文件。
 
@@ -206,7 +210,10 @@ handler。`build_registry()` 现在统一在注册前按 schema 补齐**缺失�
 
 三平台的「开机自启」都只控制**一份**登录项，勾选框在 `src/tray.rs` 里直接读写它；
 Linux 刻意不再装 `systemd --user` unit——两套并存时托盘取消勾选只能删掉 XDG
-那份，systemd 下次登录照样把服务拉起来，「关掉自启」就成了假动作。
+那份，systemd 下次登录照样把服务拉起来，「关掉自启」就成了假动作。老版遗留的
+`kuake-studio.service` 由 `install.sh` 升级时自动清理（v0.5.10 起，见上节），
+也可 `./install.sh --cleanup-legacy-only` 单独清理；CI 用假 HOME + 假 systemctl 验过
+「旧 unit 与 wants 符号链接被删、disable/daemon-reload 被调用、重复跑幂等」。
 没有桌面环境（无 D-Bus StatusNotifierWatcher）时托盘 `build()` 失败会打印一行
 提示并**自动降级为纯后台服务**，`/api/boot` 与 Web 界面照常可用，不影响启动。
 
@@ -791,7 +798,7 @@ wix/main.wxs      WiX v3 安装包源（文件清单由 heat 生成）
 .github/workflows/build.yml   六平台 CI / 出包 / 发 Release
 tools/dump-cookies.mjs  从本机 Chrome cookie 库解出夸克 cookie 并刷新 ~/.config/kuake/.env
 tools/dump-kuake-cli-json.mjs  采集 kuake CLI 的 JSON/NDJSON 信封（原图 600 / 脱敏副本）
-tools/install-linux-desktop.sh  Linux 一键安装器（随 linux-x64 包发布为 install.sh：桌面图标 + XDG 登录项自启 + 托盘）
+tools/install-linux-desktop.sh  Linux 一键安装器（随 linux-x64 包发布为 install.sh：桌面图标 + XDG 登录项自启 + 托盘 + 旧 systemd 登录项清理）
 tools/gen-tray-icon.py  从 1024 PNG 生成 64x64 RGBA 托盘图标（assets/tray-icon-64.rgba）
 tools/abi-selftest.c  host 架构真链接静态库跑的 C ABI 端到端自检（15 断言，版本无关）
 tools/cc-aarch64-musl.sh   zig cc 交叉编 C 的 wrapper（Android / 鸿蒙，绕开 host gcc 与 ohos 三元组）

@@ -166,6 +166,8 @@ for (const p of PLATFORMS) {
         const ins = find(files, (f) => f.base === 'install.sh');
         ck('Linux 一键安装器 install.sh', !!ins, ins ? '存在' : '缺失');
         ck('Linux install.sh 可执行', !!ins && (fs.statSync(ins).mode & 0o111) !== 0, ins ? 'mode ' + (fs.statSync(ins).mode & 0o777).toString(8) : '缺失');
+        const insTxt = ins ? fs.readFileSync(ins, 'utf8') : '';
+        ck('Linux install.sh 清理旧 systemd 登录项', /cleanup_legacy_systemd/.test(insTxt) && /disable --now kuake-studio\.service/.test(insTxt), insTxt ? '含 cleanup_legacy_systemd + disable --now' : '缺失');
       }
       if (p.key === 'windows-x64') {
         const exe = find(files, (f) => f.base.endsWith('.exe'));
