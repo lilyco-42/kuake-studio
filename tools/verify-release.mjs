@@ -17,6 +17,7 @@ function opt(name, def) {
 }
 const has = (n) => argv.includes(n);
 const repo = String(opt('--repo', 'lilyco-42/kuake-studio'));
+// --no-download 仅为兼容旧调用保留；现在总是先验缓存 SHA256，坏/缺则重下。
 const noDownload = has('--no-download');
 const asJson = has('--json');
 const dirArg = opt('--dir', null);
@@ -32,6 +33,10 @@ function run(cmd, args, opts) {
     env: opts.env || baseEnv, cwd: opts.cwd,
   });
   return { status: r.status, out: r.stdout || '', err: r.stderr || '', error: r.error && r.error.message };
+}
+// 跨进程冷却：GitHub 偶发断连 / 截断时等几秒再试。
+function sleep(ms) {
+  spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},' + Number(ms) + ')']);
 }
 
 const checks = [];
@@ -127,24 +132,45 @@ ck('资产总数', assets.length === 8, String(assets.length) + ' 个（期望 8
 // ── 匿名可下载 ──────────────────────────────────────────────────────────
 const first = assets[0];
 if (first) {
-  const h = run('curl', ['-sIL', '-o', '/dev/null', '-w', '%{http_code}', first.browser_download_url], { env: anonEnv });
-  ck('匿名可下载（不带 token）', /^2\d\d$/.test(h.out.trim()), 'HTTP ' + h.out.trim());
+  let code = '';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const h = run('curl', ['-sIL', '--retry', '2', '-o', '/dev/null', '-w', '%{http_code}', first.browser_download_url], { env: anonEnv });
+    code = h.out.trim();
+    if (/^2\d\d$/.test(code)) break;
+    sleep(3000);
+  }
+  ck('匿名可下载（不带 token）', /^2\d\d$/.test(code), 'HTTP ' + code);
 }
 
 toolsAvailable(['file', 'ar', 'nm', 'tar', 'unzip', 'llvm-lipo', 'llvm-objdump']);
 
 // ── 逐资产下载 + SHA256 + 解包结构 ────────────────────────────────────────
+const shaOf = (f) => createHash('sha256').update(fs.readFileSync(f)).digest('hex');
 for (const a of assets) {
   const file = path.join(dir, a.name);
-  if (!noDownload || !fs.existsSync(file)) {
-    const d = run('curl', ['-fsSL', '--retry', '3', '-o', file, a.browser_download_url], { env: anonEnv });
-    ck('下载 ' + a.name, d.status === 0 && fs.existsSync(file), d.status === 0 ? fs.statSync(file).size + ' B' : (d.err || '').trim().slice(0, 160));
-  } else {
-    ck('下载 ' + a.name + '（复用缓存）', true, fs.statSync(file).size + ' B');
-  }
   const want = String(a.digest || '').replace(/^sha256:/, '');
+  // 缓存文件也要先验 SHA256：中断的下载（截断 / 空文件）不能当作有效缓存。
+  let cached = false;
+  if (fs.existsSync(file) && want && shaOf(file) === want) cached = true;
+  else if (fs.existsSync(file)) { try { fs.rmSync(file); } catch (e) {} }
+  if (cached) {
+    ck('下载 ' + a.name + '（缓存 SHA256 通过）', true, fs.statSync(file).size + ' B');
+  } else {
+    let last = '未开始';
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const d = run('curl', ['-fsSL', '--retry', '3', '-o', file, a.browser_download_url], { env: anonEnv });
+      if (d.status === 0 && fs.existsSync(file) && (!want || shaOf(file) === want)) { last = ''; break; }
+      last = d.status === 0
+        ? ('SHA256 不符 / 截断: ' + (fs.existsSync(file) ? fs.statSync(file).size : 0) + ' B')
+        : ((d.err || '').trim().slice(0, 120) || 'curl exit ' + d.status);
+      try { if (fs.existsSync(file)) fs.rmSync(file); } catch (e) {}
+      sleep(3000);
+    }
+    ck('下载 ' + a.name, last === '',
+      last === '' ? (fs.statSync(file).size + ' B / SHA256 OK') : ('重试 4 次仍失败: ' + last));
+  }
   if (!fs.existsSync(file)) { ck('SHA256 ' + a.name, false, '文件缺失'); continue; }
-  const got = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const got = shaOf(file);
   ck('SHA256 ' + a.name, !!want && got === want, got.slice(0, 12) + '… 对照 GH digest');
 }
 
