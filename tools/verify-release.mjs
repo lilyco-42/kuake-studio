@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 验证 kuake-studio 的 GitHub Release：资产齐全 / SHA256 / 匿名可下载 / 解包结构 /
-// BUILD_INFO / 逐 .o 架构 / 6 个 C ABI 符号 / macOS universal / Windows PE / Info.plist。
+// BUILD_INFO / 逐 .o 架构 / 6 个基础 + 4 个商业化 C ABI 符号 / macOS universal / Windows PE / Info.plist。
 // 用法: node tools/verify-release.mjs [--tag v0.5.3] [--dir DIR] [--no-download] [--json]
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -54,6 +54,10 @@ const PLATFORMS = [
   { key: 'ohos-arm64', kind: 'native', target: 'aarch64-unknown-linux-ohos', arch: 'ELF ARM aarch64', archRe: /ELF.*ARM aarch64/i, pats: [/-ohos-arm64\.tar\.gz$/], want: 1 },
 ];
 const ABI = ['boot', 'call', 'free', 'schemas', 'set_cookie', 'version'];
+const ABI_COMMERCIAL = ['commercial_config', 'commercial_status', 'commercial_activate', 'commercial_deactivate'];
+// v0.5.11 起 FFI 追加 4 个商业化函数；更早的发布包没有，避免把历史 tag 全判红。
+const since = (v) => { const a = String(v).replace(/^v/, '').split('.').map(Number); return (a[0]||0)*10000 + (a[1]||0)*100 + (a[2]||0); };
+const abiFor = (v) => (since(v) >= 511 ? ABI.concat(ABI_COMMERCIAL) : ABI);
 
 function walk(root) {
   const out = [];
@@ -227,7 +231,7 @@ for (const p of PLATFORMS) {
       const syms = p.target === 'aarch64-apple-ios'
         ? run('llvm-objdump', ['--macho', '--syms', lib]).out
         : run('nm', ['-g', lib]).out;
-      for (const n of ABI) ck('ABI 符号 kuake_studio_' + n + ' @' + p.key, syms.includes('kuake_studio_' + n), '');
+      for (const n of abiFor(version)) ck('ABI 符号 kuake_studio_' + n + ' @' + p.key, syms.includes('kuake_studio_' + n), '');
     }
   }
 }
