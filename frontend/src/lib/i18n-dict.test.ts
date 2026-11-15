@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Glob } from "bun";
 
 import { ROWS, zh, en } from "@/lib/i18n-dict";
 import { interpolate, lookup } from "@/lib/i18n-core";
@@ -21,6 +22,21 @@ describe("i18n 字典（单一数据源）", () => {
   test("中英文占位符必须一一对应", () => {
     const bad = ROWS.filter(([, z, e]) => placeholders(z) !== placeholders(e));
     expect(bad.map((r) => r[0]).join(",")).toBe("");
+  });
+
+  test("源码里静态 t(key) 全部在字典中（漂移守卫）", async () => {
+    const root = new URL("..", import.meta.url).pathname;
+    const used = new Set<string>();
+    for (const rel of new Glob("**/*.{ts,tsx}").scanSync(root)) {
+      if (rel.includes(".test.")) continue;
+      const text = await Bun.file(root + rel).text();
+      for (const m of text.matchAll(/\bt\(\s*"([^"]+)"/g)) {
+        // 动态拼接的 key（如 t("nav." + tab)）以 "." 结尾，跳过；其余必须命中字典
+        if (!m[1].endsWith(".")) used.add(m[1]);
+      }
+    }
+    expect(used.size).toBeGreaterThan(150);
+    expect([...used].filter((k) => !(k in zh)).sort().join(",")).toBe("");
   });
 
   test("五个业务视图的关键键都在", () => {

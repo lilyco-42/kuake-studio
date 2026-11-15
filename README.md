@@ -184,6 +184,7 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 | 账号 | 昵称、会员类型与到期、容量占用进度、网盘后端类型与版本、**扫码登录**（一键刷新凭据） |
 | 活动日志 | 每次调用的实时进度/耗时/错误，可折叠、可清空 |
 | 关于 / 赞助 | 联系方式、赞助二维码（同源加载）、名利选其一、许可与商用口径、赞助授权解锁去广告、云端推送开关（v0.5.11） |
+| 全站 | 中文 / English 一键切换，五个业务视图与日志同语言（v0.5.12） |
 
 25 个命令：`list` `info` `search` `user` `version` `download` `share-list` `recycle-list` `create` `upload`
 `move` `copy` `rename` `delete` `share` `share-delete` `share-save` `recycle-restore`
@@ -196,6 +197,20 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 handler。`build_registry()` 现在统一在注册前按 schema 补齐**缺失或 `null`** 的参数，
 显式给的值（含 `0` / 空串）一律不覆盖。修掉的实际症状：`search` 不传 `size` 曾只回 1 条
 （应为 50）、`share` 不传 `days` 直接报参数错、`login` 不传 `timeout` 只等 10 秒。
+
+## 中英文界面 / i18n（v0.5.12）
+
+- 侧栏底部「中文 / English」按钮即时切换 `zh-CN` 与 `en`，偏好存在
+  `localStorage["kuake-studio:lang"]`，刷新与重进都保留。
+- 字典是**单一数据源** `frontend/src/lib/i18n-dict.ts`：每行 `[key, 中文, English]`，
+  `zh` / `en` 由 `Object.fromEntries` 派生，不可能出现「补了中文忘了英文」。
+- 已覆盖：App 外壳、五个业务视图（文件 / 搜索 / 分享 / 回收站 / 账号）、关于 / 赞助页、
+  启动窗、Runner 日志与 toast 标题、相对时间（`3 分钟前` / `3 min ago`）、
+  面包屑根节点（`根目录` / `Root`）。
+- 守卫：`bun test` 钉死「键唯一 + zh/en 键集一致 + 英文无中文 + 占位符一一对应 +
+  源码里所有静态 `t("…")` 的 key 都在字典」。新增文案只改字典一行。
+- 边界：上传 / 解密 / 登录等弹窗的内部错误文案，以及后端返回的 `message`（天生是中文）
+  仍按中文原样展示；迁移进度见 `docs/DEVELOPMENT-STANDARDS.md`。
 
 ## 商业化与赞助（v0.5.11）
 

@@ -12,9 +12,19 @@ declare module "bun:test" {
       toEqual(expected: unknown): void;
       toHaveLength(expected: number): void;
       toBeGreaterThanOrEqual(expected: number): void;
+      toBeGreaterThan(expected: number): void;
       toContain(expected: string): void;
       toBeNull(): void;
       toBeUndefined(): void;
     };
   };
 }
+
+/** bun 运行时最小声明（只为单测扫描源码，不引入 @types/bun / bun.lock 变更）。 */
+declare module "bun" {
+  export class Glob {
+    constructor(pattern: string);
+    scanSync(cwd: string): string[];
+  }
+}
+declare const Bun: { file(path: string): { text(): Promise<string> } };

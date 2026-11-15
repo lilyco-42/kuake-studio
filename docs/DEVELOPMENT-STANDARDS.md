@@ -46,10 +46,18 @@
 
 ## 5. i18n 迁移进度
 
-- 已做：`lib/i18n.tsx`（React Context，zh-CN / en）+ `lib/i18n-core.ts`（纯函数，可单测）。
-  关于页 / 启动窗 / 授权框 / 侧栏 / 主题文案已接 i18n。
-- 待迁移（约 800 处中文字面量）：文件 / 搜索 / 分享 / 回收站业务视图（files-view / search-view /
-  upload-dialog / decrypt-dialog 最密集）。迁移规则：抽 key 到 zh/en 字典，业务代码只调 `t(key, vars)`。
+- 已完成（v0.5.12）：`lib/i18n.tsx`（React Context，zh-CN / en，localStorage key
+  `kuake-studio:lang`）+ `lib/i18n-core.ts`（纯函数，可单测）+ `lib/i18n-dict.ts`
+  （**单一数据源**：每行 `[key, 中文, English]`，zh/en 由 `Object.fromEntries` 派生）。
+  App 外壳 / 启动窗 / 授权框 / 关于页 / 五个业务视图（文件 / 搜索 / 分享 / 回收站 / 账号）
+  与 Runner 日志（`store.tsx`）全部走 `t(key, vars)`；`format.ts` 的相对时间与面包屑
+  根节点也随语言切换。侧栏底部语言按钮即时切换，无需重启。
+- 字典守卫：`i18n-dict.test.ts` 钉死「键唯一 + zh/en 键集一致 + 值非空 + 英文无中文 +
+  占位符一一对应 + 源码静态 `t("...")` 的 key 全在字典」。新增文案只改字典一行，
+  不许在业务代码里写死中/英文字面量。
+- 未迁移：若干对话框（upload / decrypt / login / command / confirm / console / drop /
+  info / schema-form）与 `lib/api.ts` 的内部错误文案仍是中文；后端返回的
+  `message` 天生是中文，按原样展示，不翻译。
 
 ## 6. 测试与 CI 门禁
 
