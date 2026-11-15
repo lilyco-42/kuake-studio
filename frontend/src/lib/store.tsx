@@ -2,6 +2,8 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { boot, fetchSchemas, startRun, subscribe } from "@/lib/api";
+import { fetchCommercial } from "@/lib/commercial";
+import { OFFLINE_SNAPSHOT, type CommercialSnapshot } from "@/lib/commercial-core";
 import type { CommandSchema, KuakeEnvelope, RunEvent } from "@/lib/types";
 
 export interface LogLine {
@@ -19,6 +21,8 @@ interface BootInfo {
   temp: string;
   /** "native" = 内置自研夸克 API；"cli" = 回退到本机 kuake 子进程 */
   backend?: "native" | "cli";
+  /** 新版后端才有；旧版 / 失联时前端走 OFFLINE_SNAPSHOT 兜底 */
+  commercial?: boolean;
 }
 
 interface RunnerCtx {
@@ -26,6 +30,8 @@ interface RunnerCtx {
   bootError: string | null;
   info: BootInfo | null;
   schemas: CommandSchema[];
+  commercial: CommercialSnapshot;
+  setCommercial: (s: CommercialSnapshot) => void;
   logs: LogLine[];
   busy: string | null;
   progress: number | null;
@@ -44,6 +50,7 @@ export function RunnerProvider({ children }: { children: React.ReactNode }) {
   const [bootError, setBootError] = React.useState<string | null>(null);
   const [info, setInfo] = React.useState<BootInfo | null>(null);
   const [schemas, setSchemas] = React.useState<CommandSchema[]>([]);
+  const [commercial, setCommercial] = React.useState<CommercialSnapshot>(OFFLINE_SNAPSHOT);
   const [logs, setLogs] = React.useState<LogLine[]>([]);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [progress, setProgress] = React.useState<number | null>(null);
@@ -63,13 +70,17 @@ export function RunnerProvider({ children }: { children: React.ReactNode }) {
       try {
         const b = await boot();
         const s = await fetchSchemas();
+        // 商业化配置失败不影响网盘主功能：始终退回同源图片 + 联系方式的离线兜底。
+        const c = await fetchCommercial(Boolean(b.commercial));
         if (!alive) return;
+        setCommercial(c);
         setInfo({
           name: b.name,
           version: b.version,
           kuake: b.kuake,
           temp: b.temp ?? "",
           backend: b.backend ?? "native",
+          commercial: b.commercial,
         });
         setSchemas(s);
         setBooted(true);
@@ -165,6 +176,8 @@ export function RunnerProvider({ children }: { children: React.ReactNode }) {
     bootError,
     info,
     schemas,
+    commercial,
+    setCommercial,
     logs,
     busy,
     progress,

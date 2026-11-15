@@ -1,6 +1,6 @@
 [package]
 name = "kuake-studio"
-version = "0.5.10"
+version = "0.5.11"
 edition = "2021"
 description = "Quark 网盘客户端 —— lilyco 框架（Registry/App/Safety）+ shadcn/ui 前端；桌面安装包 + 移动/鸿蒙进程内原生库"
 license = "MIT OR Apache-2.0"
@@ -65,6 +65,9 @@ sha1 = { version = "0.10", features = ["compress"] }
 md-5 = "0.10"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
+# 离线赞助授权令牌：ed25519 验签（只内嵌公钥，私钥永不入库）
+# 注意：2.x 没有 "verify" 特性；default-features=false + std 即可，避免拉 wasm 相关依赖。
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std"] }
 qrcodegen = "1.8"
 httpdate = "1.0"
 

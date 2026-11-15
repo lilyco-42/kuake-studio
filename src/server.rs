@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use axum::extract::{Path, Request, State};
 use axum::http::{header, HeaderValue, StatusCode, Uri};
@@ -47,6 +48,10 @@ pub struct AppState {
     pub dist: std::path::PathBuf,
     /// 扫码登录会话 → 状态/取消句柄。后台是阻塞 std::thread，所以用 std::sync::Mutex。
     pub logins: std::sync::Mutex<HashMap<String, LoginHandle>>,
+    /// 商业化配置（内置默认 + 云端白名单字段）。std RwLock：只在无 await 时持锁。
+    pub commercial: RwLock<serde_json::Value>,
+    /// 授权文件所在用户目录；桌面 / Android / FFI 共用 commercial::config_home()。
+    pub commercial_home: std::path::PathBuf,
 }
 
 fn generate_id() -> String {
@@ -470,6 +475,8 @@ async fn api_boot(State(state): State<Arc<AppState>>) -> Response {
         "backend": if std::env::var("KUAKE_STUDIO_BACKEND").as_deref() == Ok("cli") { "cli" } else { "native" },
         // 临时目录也交给后端决定：前端原来硬编码 /tmp，在 Windows 上会落到盘符根。
         "temp": std::env::temp_dir().to_string_lossy(),
+        // 前端据此决定是否拉 /api/commercial/config（旧版后端没有这些路由）。
+        "commercial": true,
     }))
     .into_response()
 }
@@ -479,6 +486,104 @@ async fn api_boot(State(state): State<Arc<AppState>>) -> Response {
 /// 不硬编码任何 kuake 命令 —— 后端加一条命令，UI 自动多一个入口。
 async fn api_schema(State(state): State<Arc<AppState>>) -> Response {
     Json(serde_json::json!({ "commands": state.schemas })).into_response()
+}
+
+// ── 商业化：联系方式 / 赞助图 / 启动弹窗 / 广告位 / 云端推送 / 离线授权 ───
+
+#[derive(serde::Deserialize)]
+struct LicenseRequest {
+    #[serde(alias = "code")]
+    token: String,
+}
+
+fn commercial_snapshot(state: &AppState) -> serde_json::Value {
+    let cfg = state
+        .commercial
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    crate::commercial::snapshot(&state.commercial_home, &cfg)
+}
+
+async fn api_commercial_config(State(state): State<Arc<AppState>>) -> Response {
+    Json(commercial_snapshot(&state)).into_response()
+}
+
+async fn api_commercial_status(State(state): State<Arc<AppState>>) -> Response {
+    Json(crate::commercial::status(&state.commercial_home)).into_response()
+}
+
+async fn api_commercial_activate(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<LicenseRequest>,
+) -> Response {
+    match crate::commercial::activate(&state.commercial_home, &req.token) {
+        Ok(_) => Json(commercial_snapshot(&state)).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
+async fn api_commercial_deactivate(State(state): State<Arc<AppState>>) -> Response {
+    match crate::commercial::deactivate(&state.commercial_home) {
+        Ok(_) => Json(commercial_snapshot(&state)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+/// 赞助图同源路由：白名单 + include_bytes!，CSP 不用为任何外部域名开 img-src。
+/// 路径参数只接受文件名（commercial::sponsor_png 白名单），不做磁盘拼接，无穿越。
+async fn api_sponsor_png(Path(name): Path<String>) -> Response {
+    let Some(bytes) = crate::commercial::sponsor_png(&name) else {
+        return (StatusCode::NOT_FOUND, "Not Found").into_response();
+    };
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        bytes.to_vec(),
+    )
+        .into_response()
+}
+
+/// 拉一次远端配置并合入白名单字段。阻塞 HTTP 放 spawn_blocking，绝不占 tokio worker。
+/// 远端改不了收款码 / 联系方式 / 公钥 / 拉取地址；失败只记 last_error，不影响离线使用。
+async fn commercial_refresh_once(state: &Arc<AppState>) -> Result<serde_json::Value, String> {
+    let (base, url) = {
+        let cfg = state
+            .commercial
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let url = cfg["cloud"]["url"].as_str().unwrap_or("").to_string();
+        (cfg, url)
+    };
+    if url.is_empty() {
+        return Err("未配置 KUAKE_STUDIO_CLOUD_CONFIG_URL".into());
+    }
+    let remote = tokio::task::spawn_blocking(move || crate::commercial::fetch_cloud_config(&url))
+        .await
+        .map_err(|e| format!("云端拉取线程异常: {e}"))??;
+    let mut out = crate::commercial::merge_cloud_config(&base, &remote)?;
+    out["cloud"]["last_refresh"] = serde_json::json!(crate::commercial::now_secs());
+    out["cloud"]["last_error"] = serde_json::Value::Null;
+    {
+        let mut guard = state.commercial.write().unwrap_or_else(|e| e.into_inner());
+        *guard = out.clone();
+    }
+    Ok(crate::commercial::snapshot(&state.commercial_home, &out))
+}
+
+async fn api_commercial_refresh(State(state): State<Arc<AppState>>) -> Response {
+    match commercial_refresh_once(&state).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => {
+            let mut guard = state.commercial.write().unwrap_or_else(|g| g.into_inner());
+            (*guard)["cloud"]["last_error"] = serde_json::Value::String(e.clone());
+            (StatusCode::BAD_GATEWAY, e).into_response()
+        }
+    }
 }
 
 // ── 静态资源 ───────────────────────────────────────────────
@@ -605,6 +710,15 @@ pub fn default_dist() -> std::path::PathBuf {
 
 pub fn build_state(registry: Registry, token: String, dist: std::path::PathBuf) -> Arc<AppState> {
     let schemas = registry.visible().map(|c| c.schema.clone()).collect();
+    let mut commercial = crate::commercial::default_config();
+    // 云端推送是「显式开启」：不设环境变量就一个外连都不发，离线可用。
+    if let Ok(url) = std::env::var("KUAKE_STUDIO_CLOUD_CONFIG_URL") {
+        let url = url.trim().to_string();
+        if !url.is_empty() {
+            commercial["cloud"]["enabled"] = serde_json::Value::Bool(true);
+            commercial["cloud"]["url"] = serde_json::Value::String(url);
+        }
+    }
     Arc::new(AppState {
         registry: Arc::new(registry),
         schemas,
@@ -613,6 +727,8 @@ pub fn build_state(registry: Registry, token: String, dist: std::path::PathBuf) 
         token,
         dist,
         logins: std::sync::Mutex::new(HashMap::new()),
+        commercial: RwLock::new(commercial),
+        commercial_home: crate::commercial::config_home(),
     })
 }
 
@@ -638,12 +754,40 @@ pub async fn serve(state: Arc<AppState>, port: u16) -> std::io::Result<()> {
         .route("/api/login/start", post(api_login_start))
         .route("/api/login/status/{sid}", get(api_login_status))
         .route("/api/login/cancel/{sid}", post(api_login_cancel))
+        .route("/api/commercial/config", get(api_commercial_config))
+        .route("/api/commercial/status", get(api_commercial_status))
+        .route("/api/commercial/activate", post(api_commercial_activate))
+        .route(
+            "/api/commercial/deactivate",
+            post(api_commercial_deactivate),
+        )
+        .route("/api/commercial/refresh", post(api_commercial_refresh))
+        .route("/assets/sponsor/{name}", get(api_sponsor_png))
         .fallback(static_handler)
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             crate::security::guard,
         ))
         .with_state(Arc::clone(&state));
+
+    // 云端推送：只有显式设了 URL 才起后台轮询；间隔每次从（可被远端白名单改的）配置读。
+    if state.commercial.read().unwrap_or_else(|e| e.into_inner())["cloud"]["enabled"]
+        .as_bool()
+        .unwrap_or(false)
+    {
+        let st = Arc::clone(&state);
+        tokio::spawn(async move {
+            loop {
+                let _ = commercial_refresh_once(&st).await;
+                let secs = st.commercial.read().unwrap_or_else(|e| e.into_inner())["cloud"]
+                    ["refresh_interval_sec"]
+                    .as_u64()
+                    .unwrap_or(3600)
+                    .clamp(60, 86_400);
+                tokio::time::sleep(Duration::from_secs(secs)).await;
+            }
+        });
+    }
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -682,6 +826,41 @@ mod tests {
         let reg = Registry::new();
         let state = build_state(reg, "t".into(), std::path::PathBuf::from("dist"));
         assert!(state.logins.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn commercial_snapshot_is_offline_and_same_origin() {
+        let reg = Registry::new();
+        let state = build_state(reg, "t".into(), std::path::PathBuf::from("dist"));
+        let v = commercial_snapshot(&state);
+        assert_eq!(v["config"]["contact"]["wechat"], "lilyco42");
+        assert_eq!(v["config"]["contact"]["qq"], "1957374829");
+        assert_eq!(v["config"]["cloud"]["url"], "");
+        assert_eq!(v["config"]["cloud"]["enabled"], false);
+        let img = v["config"]["sponsor"]["links"][0]["image"]
+            .as_str()
+            .unwrap();
+        assert!(img.starts_with("/assets/sponsor/"), "赞助图必须同源");
+        assert!(v["status"].get("sponsored").is_some());
+    }
+
+    #[test]
+    fn sponsor_png_whitelist_blocks_traversal() {
+        assert!(crate::commercial::sponsor_png("wechat-pay.png").is_some());
+        assert!(crate::commercial::sponsor_png("..%2f.env").is_none());
+        assert!(crate::commercial::sponsor_png("../../etc/passwd").is_none());
+    }
+
+    #[tokio::test]
+    async fn refresh_without_url_fails_without_network() {
+        let reg = Registry::new();
+        let state = build_state(reg, "t".into(), std::path::PathBuf::from("dist"));
+        {
+            let mut g = state.commercial.write().unwrap();
+            (*g)["cloud"]["url"] = serde_json::Value::String(String::new());
+        }
+        let err = commercial_refresh_once(&state).await.unwrap_err();
+        assert!(err.contains("未配置"), "实际: {err}");
     }
 
     #[test]

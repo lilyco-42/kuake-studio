@@ -47,6 +47,18 @@ int32_t kuake_studio_set_cookie(const char *cookie);
  * 返回 JSON 信封（含 {success:false,code,message,data:null} 错误信封），需 free。 */
 char *kuake_studio_call(const char *cmd, const char *args_json);
 
+/* 商业化配置快照 {config,status,sponsored}；赞助图内联为 data: URI。需 free。 */
+char *kuake_studio_commercial_config(void);
+
+/* 当前授权状态（每次重新验签）。需 free。 */
+char *kuake_studio_commercial_status(void);
+
+/* 激活离线赞助授权码；非法码返回 {success:false,...}。需 free。 */
+char *kuake_studio_commercial_activate(const char *token);
+
+/* 取消本机授权。需 free。 */
+char *kuake_studio_commercial_deactivate(void);
+
 /* 释放本库返回的 char*；传 NULL 是空操作。只能传本库返回的指针。 */
 void kuake_studio_free(char *p);
 

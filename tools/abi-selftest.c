@@ -68,6 +68,23 @@ int main(void) {
     check(contains(junk, "args_json 不是合法 JSON"), "非法 JSON 被拦下且不 panic");
     kuake_studio_free(junk);
 
+    /* 商业化：联系方式 / 内联赞助图 / 离线授权（FFI 宿主无 HTTP 服务也能用） */
+    char *cc = kuake_studio_commercial_config();
+    printf("commercial = %zu bytes\n", cc ? strlen(cc) : 0);
+    check(contains(cc, "\"wechat\":\"lilyco42\""), "commercial_config 含微信联系方式");
+    check(contains(cc, "data:image/png;base64,"), "commercial_config 内联赞助 PNG");
+    check(contains(cc, "\"sponsored\""), "commercial_config 含授权状态");
+    kuake_studio_free(cc);
+
+    char *cs = kuake_studio_commercial_status();
+    check(contains(cs, "\"sponsored\""), "commercial_status 返回授权状态");
+    kuake_studio_free(cs);
+
+    char *badlic = kuake_studio_commercial_activate("not-a-license");
+    printf("activate(bad) = %s\n", badlic ? badlic : "(null)");
+    check(contains(badlic, "\"success\":false"), "非法授权码被拒绝且不 panic");
+    kuake_studio_free(badlic);
+
     kuake_studio_free(NULL);                              /* NULL 是空操作 */
     printf("\n%s (%d failures)\n", fails == 0 ? "ABI SELFTEST OK" : "ABI SELFTEST FAILED", fails);
     return fails == 0 ? 0 : 1;

@@ -183,6 +183,7 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 | 回收站 | 最近删除列表（删除时间/剩余天数）、勾选后**批量恢复**、**永久删除**、分页加载（v0.5.5） |
 | 账号 | 昵称、会员类型与到期、容量占用进度、网盘后端类型与版本、**扫码登录**（一键刷新凭据） |
 | 活动日志 | 每次调用的实时进度/耗时/错误，可折叠、可清空 |
+| 关于 / 赞助 | 联系方式、赞助二维码（同源加载）、名利选其一、许可与商用口径、赞助授权解锁去广告、云端推送开关（v0.5.11） |
 
 25 个命令：`list` `info` `search` `user` `version` `download` `share-list` `recycle-list` `create` `upload`
 `move` `copy` `rename` `delete` `share` `share-delete` `share-save` `recycle-restore`
@@ -195,6 +196,21 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 handler。`build_registry()` 现在统一在注册前按 schema 补齐**缺失或 `null`** 的参数，
 显式给的值（含 `0` / 空串）一律不覆盖。修掉的实际症状：`search` 不传 `size` 曾只回 1 条
 （应为 50）、`share` 不传 `days` 直接报参数错、`login` 不传 `timeout` 只等 10 秒。
+
+## 商业化与赞助（v0.5.11）
+
+- **关于 / 赞助页**：微信 `lilyco42` / QQ `1957374829` / B 站联系方式，两张收款码 PNG 由
+  `include_bytes!` 内嵌并走同源 `/assets/sponsor/{name}`，CSP 不为任何外域开 `img-src`。
+- **启动提示**：每天默认展示一次（可「不再显示」），赞助者自动关闭。
+- **名利选其一**：赞助者可在「署名（fame）」与「商用权益（profit）」中二选一，作者按选择登记。
+- **广告位**：只有虚线占位框（`startup` / `about` 两个 slot），不加载远端脚本 / iframe；
+  赞助者 `snapshot` 自动把 `startup.enabled` 与 `ad.enabled` 置 false。
+- **赞助授权**：ed25519 验签，仓库只内嵌公钥，私钥永不入库；`license.json` 目录 0700 / 文件 0600。
+  激活 / 移除 / 云端刷新三个 POST 都走回环 + 令牌安全门。
+- **云端推送**：默认零外连；只有显式 `KUAKE_STUDIO_CLOUD_CONFIG_URL` 才拉，且 `merge_cloud_config`
+  只接受白名单字段，改不了联系方式 / 收款码 / 公钥 / 授权状态 / 拉取地址。
+- **许可**：详见 `LICENSE`（MIT）。源码可见、个人自由使用与修改；禁止二次贩卖／转售；
+  商用（含付费或赞助后的商业使用）须获得作者 lilyco 授权。规范见 `docs/DEVELOPMENT-STANDARDS.md`。
 
 ## 系统托盘与跨平台快捷方式（v0.5.7）
 
@@ -783,14 +799,15 @@ arm64 / x86_64 两套 so，原样塞回构建目录再打可调试包（`KUAKE_S
 src/main.rs       桌面入口：--cli / --mcp / --schema / 默认 Web + 系统托盘 / 单实例（仅 desktop 特性编）
 src/tray.rs       系统托盘：图标 / 菜单 / 三平台开机自启 / 主线程事件泵 / 无桌面环境降级
 src/lib.rs        核心库：build_registry() / call() / set_cookie()（六平台共用，不依赖 axum）
-src/ffi.rs        C ABI：version/boot/schemas/set_cookie/call/free（catch_unwind 兜底）
-include/kuake_studio.h   C 头文件：宿主 App 接入的 6 个函数与约定
+src/ffi.rs        C ABI：version/boot/schemas/set_cookie/call/free + commercial 4 个（catch_unwind 兜底）
+include/kuake_studio.h   C 头文件：宿主 App 接入的 10 个函数与约定
+src/commercial.rs 商业化核心：赞助图 / 授权 ed25519 验签 / 云端白名单合并（六平台共用）
 src/apps.rs       25 个 #[derive(App)] 命令（lilyco 派生宏）
 src/crypt.rs      .kcrypt 容器：AES-256-GCM 分块 + PBKDF2-SHA256 派生密钥
 src/quark.rs      自研夸克 API：reqwest 直连官方接口，复刻 CLI 信封（默认后端）
 src/login.rs      夸克扫码登录：cookie jar / QR SVG / service_ticket 换 cookie / 校验昵称 / 备份写 .env
 src/kuake.rs      kuake CLI 回退后端 + 单点拦截（脏行解析、取消、超时、进度）
-src/server.rs     axum 宿主：boot/schema/run/progress/cancel/upload/upload-raw/login + 静态托管（desktop）
+src/server.rs     axum 宿主：boot/schema/run/progress/cancel/upload/upload-raw/login + commercial 6 路由 + 赞助图同源路由 + 静态托管（desktop）
 src/security.rs   回环闸 + 令牌（desktop）
 src/paths.rs      HOME / USERPROFILE 与 ~ 展开（Windows 兼容）
 build.rs          Windows 目标嵌 exe 图标与版本信息

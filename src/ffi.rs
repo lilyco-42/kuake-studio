@@ -118,7 +118,64 @@ pub unsafe extern "C" fn kuake_studio_call(
     alloc(s)
 }
 
-/// 释放 kuake_studio_boot / _schemas / _call 返回的字符串。
+/// 商业化配置快照：{config,status,sponsored}。赞助图内联为 data: URI，
+/// 因为 iOS / 鸿蒙宿主不跑 axum，没有 /assets/sponsor/* 这条同源路由。
+/// 返回值需 kuake_studio_free。
+#[no_mangle]
+pub extern "C" fn kuake_studio_commercial_config() -> *mut c_char {
+    let s = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let cfg = crate::commercial::config_inline(&crate::commercial::default_config());
+        crate::commercial::snapshot(&crate::commercial::config_home(), &cfg).to_string()
+    }))
+    .unwrap_or_else(|_| failure("PANIC", "commercial_config 内部错误（panic 已拦截）"));
+    alloc(s)
+}
+
+/// 只取当前授权状态（每次重新验签）。返回值需 kuake_studio_free。
+#[no_mangle]
+pub extern "C" fn kuake_studio_commercial_status() -> *mut c_char {
+    let s = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::commercial::status(&crate::commercial::config_home()).to_string()
+    }))
+    .unwrap_or_else(|_| failure("PANIC", "commercial_status 内部错误（panic 已拦截）"));
+    alloc(s)
+}
+
+/// 激活离线赞助授权码。返回状态 JSON；非法码返回 {success:false,...} 信封。
+/// 返回值需 kuake_studio_free。
+///
+/// # Safety
+/// token 必须是 NULL 或指向合法的、以 NUL 结尾的 UTF-8 C 字符串。
+#[no_mangle]
+pub unsafe extern "C" fn kuake_studio_commercial_activate(token: *const c_char) -> *mut c_char {
+    let s = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let Some(t) = (unsafe { input(token) }) else {
+            return failure("INVALID_ARG", "token 为空或非法 UTF-8");
+        };
+        match crate::commercial::activate(&crate::commercial::config_home(), t) {
+            Ok(v) => v.to_string(),
+            Err(e) => failure("INVALID_ARG", &e),
+        }
+    }))
+    .unwrap_or_else(|_| failure("PANIC", "commercial_activate 内部错误（panic 已拦截）"));
+    alloc(s)
+}
+
+/// 取消本机授权（删除 license.json）。返回值需 kuake_studio_free。
+#[no_mangle]
+pub extern "C" fn kuake_studio_commercial_deactivate() -> *mut c_char {
+    let s =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || match crate::commercial::deactivate(&crate::commercial::config_home()) {
+                Ok(v) => v.to_string(),
+                Err(e) => failure("IO", &e),
+            },
+        ))
+        .unwrap_or_else(|_| failure("PANIC", "commercial_deactivate 内部错误（panic 已拦截）"));
+    alloc(s)
+}
+
+/// 释放 kuake_studio_boot / _schemas / _call / _commercial_* 返回的字符串。
 /// 只能传本库返回的指针；传 NULL 是安全的空操作。
 ///
 /// # Safety
@@ -176,6 +233,37 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["success"], false);
         assert_eq!(v["code"], "INVALID_ARG");
+    }
+
+    #[test]
+    fn commercial_config_inlines_png_and_contacts() {
+        let s = unsafe { take(kuake_studio_commercial_config()) };
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["config"]["contact"]["wechat"], "lilyco42");
+        assert_eq!(v["config"]["contact"]["qq"], "1957374829");
+        let img = v["config"]["sponsor"]["links"][0]["image"]
+            .as_str()
+            .unwrap();
+        assert!(
+            img.starts_with("data:image/png;base64,"),
+            "FFI 宿主没有 HTTP 服务，图片必须内联"
+        );
+        assert!(v["config"]["legal"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("禁止二次贩卖"));
+    }
+
+    #[test]
+    fn commercial_bad_license_is_a_failure_envelope() {
+        let c = CString::new("not-a-license").unwrap();
+        let s = unsafe { take(kuake_studio_commercial_activate(c.as_ptr())) };
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["success"], false);
+        assert_eq!(v["code"], "INVALID_ARG");
+        let s2 = unsafe { take(kuake_studio_commercial_status()) };
+        let v2: serde_json::Value = serde_json::from_str(&s2).unwrap();
+        assert!(v2.get("sponsored").is_some());
     }
 
     #[test]

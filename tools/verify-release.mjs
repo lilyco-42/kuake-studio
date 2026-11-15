@@ -162,6 +162,8 @@ for (const p of PLATFORMS) {
     if (p.kind === 'desktop') {
       const html = find(files, (f) => /(^|\/)dist\/index\.html$/.test(f.rel));
       ck('前端 dist ' + p.key, !!html, html ? 'dist/index.html 存在' : '缺失');
+      const lic = find(files, (f) => f.base === 'LICENSE');
+      ck('LICENSE ' + p.key, !!lic, lic ? '存在' : '缺失');
       if (p.key === 'linux-x64') {
         const ins = find(files, (f) => f.base === 'install.sh');
         ck('Linux 一键安装器 install.sh', !!ins, ins ? '存在' : '缺失');

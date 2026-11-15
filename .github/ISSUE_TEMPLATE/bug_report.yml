@@ -1,0 +1,24 @@
+name: Bug 报告
+description: 复现一个缺陷
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options: ["Windows x64", "Linux x64", "macOS universal", "Android", "iOS", "OpenHarmony", "其他 / 网页"]
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: 版本号（/api/boot 的 version）
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+    validations: { required: true }
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图

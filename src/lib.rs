@@ -8,6 +8,7 @@
 //! 宿主 App（Kotlin/Swift/ArkTS + WebView）自己渲染 UI、自己管凭据，本库只做逻辑。
 
 pub mod apps;
+pub mod commercial;
 pub mod crypt;
 pub mod ffi;
 pub mod kuake;

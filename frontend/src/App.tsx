@@ -10,9 +10,13 @@ import {
   Trash2,
   Sun,
   User,
+  Heart,
+  Languages,
 } from "lucide-react";
 
 import { ConsolePanel } from "@/components/console-panel";
+import { StartupDialog } from "@/components/commercial/startup-dialog";
+import { AboutView } from "@/components/views/about-view";
 import { AccountView } from "@/components/views/account-view";
 import { FilesView } from "@/components/views/files-view";
 import { SearchView } from "@/components/views/search-view";
@@ -21,14 +25,15 @@ import { SharesView } from "@/components/views/shares-view";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useI18n } from "@/lib/i18n";
 import { useRunner } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
-type Tab = "files" | "search" | "shares" | "recycle" | "account";
+type Tab = "files" | "search" | "shares" | "recycle" | "account" | "about";
 
 function readHash(): Tab {
   const h = location.hash.replace(/^#/, "");
-  return h === "search" || h === "shares" || h === "recycle" || h === "account" ? h : "files";
+  return h === "search" || h === "shares" || h === "recycle" || h === "account" || h === "about" ? h : "files";
 }
 
 const NAV: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
@@ -37,10 +42,12 @@ const NAV: { id: Tab; label: string; icon: React.ComponentType<{ className?: str
   { id: "shares", label: "分享", icon: Link2 },
   { id: "recycle", label: "回收站", icon: Trash2 },
   { id: "account", label: "账号", icon: User },
+  { id: "about", label: "关于 / 赞助", icon: Heart },
 ];
 
 export default function App() {
   const { booted, bootError, info, schemas, logs } = useRunner();
+  const { t, lang, setLang } = useI18n();
   const [tab, setTabState] = React.useState<Tab>(() => readHash());
   // 「搜索 → 跳到所在目录」：用递增 nonce 让 FilesView 重新拉指定目录
   const [filesJump, setFilesJump] = React.useState<{ path: string; nonce: number } | null>(null);
@@ -64,9 +71,17 @@ export default function App() {
 
   React.useEffect(() => {
     const onHash = () => setTabState(readHash());
+    const onTabRequest = (e: Event) => {
+      const next = (e as CustomEvent<string>).detail;
+      if (next === "about") setTab("about");
+    };
     window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
+    window.addEventListener("kuake-studio:set-tab", onTabRequest);
+    return () => {
+      window.removeEventListener("hashchange", onHash);
+      window.removeEventListener("kuake-studio:set-tab", onTabRequest);
+    };
+  }, [setTab]);
 
   const [theme, setTheme] = React.useState<"dark" | "light">(() =>
     document.documentElement.classList.contains("dark") ? "dark" : "light",
@@ -91,17 +106,17 @@ export default function App() {
         <div className="w-full max-w-lg rounded-xl border border-destructive/40 bg-card p-6">
           <div className="flex items-center gap-2 text-destructive">
             <Info className="size-4" />
-            <h1 className="text-sm font-semibold">无法连接本地后端</h1>
+            <h1 className="text-sm font-semibold">{t("boot.title")}</h1>
           </div>
           <p className="mt-2 break-all text-xs text-muted-foreground">{bootError}</p>
           <ul className="mt-4 grid gap-1 text-[11.5px] text-muted-foreground">
-            <li>· 确认后端进程仍在运行（终端里没有报错退出）</li>
-            <li>· 确认浏览器地址是 http://127.0.0.1 上的端口，不是别的域名</li>
-            <li>· 确认 KUAKE_COOKIE 有效，必要时重启程序</li>
+            <li>· {t("boot.hint1")}</li>
+            <li>· {t("boot.hint2")}</li>
+            <li>· {t("boot.hint3")}</li>
           </ul>
           <div className="mt-4 flex gap-2">
             <Button size="sm" onClick={() => location.reload()}>
-              重新加载
+              {t("boot.reload")}
             </Button>
           </div>
           <pre className="mt-4 max-h-40 overflow-auto rounded bg-muted p-2 font-mono text-[10.5px] text-muted-foreground">
@@ -123,7 +138,7 @@ export default function App() {
             </div>
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold leading-tight">Kuake Studio</p>
-              <p className="truncate text-[10.5px] text-muted-foreground">lilyco + shadcn</p>
+              <p className="truncate text-[10.5px] text-muted-foreground">{t("brand.subtitle")}</p>
             </div>
           </div>
           <div className="mb-2 grid size-9 place-items-center rounded-lg bg-primary/15 text-primary md:hidden">
@@ -145,10 +160,10 @@ export default function App() {
                   onClick={() => setTab(n.id)}
                   title={
                     n.id === "search" && !hasSearch
-                      ? "搜索仅在内置原生后端可用"
+                      ? t("cap.searchNative")
                       : n.id === "recycle" && !hasRecycle
-                        ? "回收站仅在内置原生后端可用"
-                        : n.label
+                        ? t("cap.recycleNative")
+                        : t("nav." + n.id)
                   }
                   className={cn(
                     "flex items-center gap-2.5 rounded-md px-2 py-2 text-sm transition-colors",
@@ -160,7 +175,7 @@ export default function App() {
                   )}
                 >
                   <Icon className="size-4 shrink-0" />
-                  <span className="hidden md:inline">{n.label}</span>
+                  <span className="hidden md:inline">{t("nav." + n.id)}</span>
                 </button>
               );
             })}
@@ -171,11 +186,21 @@ export default function App() {
               variant="ghost"
               size="sm"
               className="justify-center gap-2 px-2 text-xs text-muted-foreground md:justify-start"
+              onClick={() => setLang(lang === "zh-CN" ? "en" : "zh-CN")}
+              title={t("lang.toggle")}
+            >
+              <Languages className="size-4" />
+              <span className="hidden md:inline">{t("lang.name")}</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="justify-center gap-2 px-2 text-xs text-muted-foreground md:justify-start"
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              title="切换明暗主题"
+              title={t("theme.toggle")}
             >
               {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
-              <span className="hidden md:inline">{theme === "dark" ? "亮色" : "暗色"}</span>
+              <span className="hidden md:inline">{theme === "dark" ? t("theme.toLight") : t("theme.toDark")}</span>
             </Button>
             <div className="hidden px-2 pb-1 text-[10.5px] leading-4 text-muted-foreground md:block">
               <p className="truncate">{info?.name ?? "kuake-studio"}</p>
@@ -189,22 +214,22 @@ export default function App() {
         {/* 主区 */}
         <main className="flex min-w-0 flex-1 flex-col">
           <header className="flex items-center gap-2 border-b px-4 py-2">
-            <h1 className="text-sm font-medium">{NAV.find((n) => n.id === tab)?.label}</h1>
+            <h1 className="text-sm font-medium">{t("nav." + tab)}</h1>
             {booted ? (
               <Badge variant="muted" className="font-mono text-[10px]">
-                {schemas.length} 个命令
+                {t("header.commands", { n: schemas.length })}
               </Badge>
             ) : null}
             <div className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground">
               {booted ? (
                 <>
                   <span className="size-1.5 rounded-full bg-success" />
-                  已连接
+                  {t("header.connected")}
                 </>
               ) : (
                 <>
                   <Loader2 className="size-3 animate-spin" />
-                  正在握手…
+                  {t("header.connecting")}
                 </>
               )}
             </div>
@@ -225,13 +250,16 @@ export default function App() {
             <SharesView schemas={schemas} />
           ) : tab === "recycle" ? (
             <RecycleView />
-          ) : (
+          ) : tab === "account" ? (
             <AccountView />
+          ) : (
+            <AboutView />
           )}
         </main>
       </div>
 
       <ConsolePanel />
+      <StartupDialog />
     </div>
   );
 }
