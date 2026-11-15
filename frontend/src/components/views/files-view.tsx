@@ -43,6 +43,8 @@ import { DecryptDialog } from "@/components/decrypt-dialog";
 import { fileIcon } from "@/components/file-icon";
 import { useRunner } from "@/lib/store";
 import { formatBytes, formatTime, joinPath, relativeTime, splitPath } from "@/lib/format";
+import { useI18n } from "@/lib/i18n";
+import type { Lang } from "@/lib/i18n-core";
 import type { ArgSchema, CommandSchema, KuakeFile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -89,6 +91,7 @@ export function FilesView({
   jump?: { path: string; nonce: number } | null;
 }) {
   const { run, booted } = useRunner();
+  const { t, lang } = useI18n();
   const [dir, setDir] = React.useState<DirState>({
     path: "/",
     items: [],
@@ -118,7 +121,7 @@ export function FilesView({
         setHistory((h) => (h[h.length - 1] === from ? h : [...h, from].slice(-50)));
       }
       try {
-        const data = await run<{ list: KuakeFile[] }>("list", { path }, "列出目录");
+        const data = await run<{ list: KuakeFile[] }>("list", { path }, t("op.list"));
         const list = data?.list ?? [];
         const alive = new Set(list.map((it) => itemId(it, path)));
         setSelected((cur) => cur.filter((id) => alive.has(id)));
@@ -133,7 +136,7 @@ export function FilesView({
         });
       }
     },
-    [run, dir.path],
+    [run, dir.path, t],
   );
 
   // 搜索页「跳到所在目录」会带一个递增 nonce；初始挂载仍从根开始。
@@ -148,16 +151,17 @@ export function FilesView({
   const sorted = React.useMemo(() => {
     const items = [...dir.items];
     const factor = sort.dir === "asc" ? 1 : -1;
+    const loc: Lang = lang === "en" ? "en" : "zh-CN";
     items.sort((a, b) => {
       if (a.dir !== b.dir) return a.dir ? -1 : 1; // 目录恒在前
       if (sort.key === "size") return (a.size - b.size) * factor;
       if (sort.key === "mtime") return ((a.mtime ?? 0) - (b.mtime ?? 0)) * factor;
-      return a.file_name.localeCompare(b.file_name, "zh-CN") * factor;
+      return a.file_name.localeCompare(b.file_name, loc) * factor;
     });
     return items;
-  }, [dir.items, sort]);
+  }, [dir.items, sort, lang]);
 
-  const crumbs = splitPath(dir.path);
+  const crumbs = splitPath(dir.path, lang);
   const counts = {
     dirs: dir.items.filter((i) => i.dir).length,
     files: dir.items.filter((i) => !i.dir).length,
@@ -203,10 +207,10 @@ export function FilesView({
       {/* 工具条：面包屑 + 排序 + 新建/上传 */}
       <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-          <Button variant="ghost" size="icon-sm" onClick={() => void load("/")} title="根目录">
+          <Button variant="ghost" size="icon-sm" onClick={() => void load("/")} title={t("format.root")}>
             <Home className="size-4" />
           </Button>
-          <Button variant="ghost" size="icon-sm" onClick={goUp} disabled={history.length === 0} title="上一级">
+          <Button variant="ghost" size="icon-sm" onClick={goUp} disabled={history.length === 0} title={t("files.up")}>
             <CornerUpLeft className="size-4" />
           </Button>
           <nav className="flex min-w-0 flex-wrap items-center gap-0.5 text-sm">
@@ -228,24 +232,24 @@ export function FilesView({
         </div>
 
         <div className="flex items-center gap-1.5">
-          <Button variant="ghost" size="icon-sm" onClick={() => void load(dir.path)} title="刷新">
+          <Button variant="ghost" size="icon-sm" onClick={() => void load(dir.path)} title={t("common.refresh")}>
             <RefreshCw className={cn("size-4", dir.loading && "animate-spin")} />
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" title="排序">
+              <Button variant="ghost" size="icon-sm" title={t("files.sort")}>
                 <ArrowDownUp className="size-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuLabel>排序</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => setSort({ key: "name", dir: "asc" })}>名称 升序</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setSort({ key: "name", dir: "desc" })}>名称 降序</DropdownMenuItem>
+              <DropdownMenuLabel>{t("files.sort")}</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => setSort({ key: "name", dir: "asc" })}>{t("files.sortNameAsc")}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSort({ key: "name", dir: "desc" })}>{t("files.sortNameDesc")}</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setSort({ key: "mtime", dir: "desc" })}>修改时间 最新</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setSort({ key: "mtime", dir: "asc" })}>修改时间 最旧</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSort({ key: "mtime", dir: "desc" })}>{t("files.sortMtimeNewest")}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSort({ key: "mtime", dir: "asc" })}>{t("files.sortMtimeOldest")}</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setSort({ key: "size", dir: "desc" })}>大小 从大到小</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSort({ key: "size", dir: "desc" })}>{t("files.sortSizeDesc")}</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
           <Button
@@ -256,30 +260,30 @@ export function FilesView({
             disabled={!booted}
           >
             <FolderPlus className="size-4" />
-            新建文件夹
+            {t("files.newFolder")}
           </Button>
           <Button size="sm" className="gap-1.5" onClick={() => setDialog({ kind: "upload" })} disabled={!booted}>
             <UploadIcon className="size-4" />
-            上传
+            {t("files.upload")}
           </Button>
         </div>
       </div>
 
       <div className="flex items-center gap-3 border-b px-4 py-1.5 text-[11.5px] text-muted-foreground">
-        <span>{counts.dirs} 个文件夹</span>
-        <span>{counts.files} 个文件</span>
-        <span>共 {formatBytes(counts.bytes)}</span>
+        <span>{t("files.countDirs", { n: counts.dirs })}</span>
+        <span>{t("files.countFiles", { n: counts.files })}</span>
+        <span>{t("files.total", { size: formatBytes(counts.bytes) })}</span>
         <span className="ml-auto truncate font-mono">{dir.path}</span>
       </div>
 
       {selected.length > 0 ? (
         <div className="flex flex-wrap items-center gap-1.5 border-b bg-accent/30 px-4 py-2">
-          <span className="text-xs font-medium">已选 {selected.length} 项</span>
+          <span className="text-xs font-medium">{t("common.selected", { n: selected.length })}</span>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setDialog({ kind: "batch-move" })}>
-            <Scissors className="size-4" /> 批量移动
+            <Scissors className="size-4" /> {t("files.batchMove")}
           </Button>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setDialog({ kind: "batch-copy" })}>
-            <Copy className="size-4" /> 批量复制
+            <Copy className="size-4" /> {t("files.batchCopy")}
           </Button>
           <Button
             variant="outline"
@@ -287,10 +291,10 @@ export function FilesView({
             className="gap-1.5 text-destructive hover:text-destructive"
             onClick={() => setConfirmBatchDelete(true)}
           >
-            <Trash2 className="size-4" /> 批量删除
+            <Trash2 className="size-4" /> {t("files.batchDelete")}
           </Button>
           <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setSelected([])}>
-            清空选择
+            {t("common.clearSelection")}
           </Button>
         </div>
       ) : null}
@@ -298,10 +302,10 @@ export function FilesView({
       <ScrollArea className="min-h-0 flex-1">
         {dir.error ? (
           <div className="m-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
-            <p className="text-sm font-medium text-destructive">读取失败</p>
+            <p className="text-sm font-medium text-destructive">{t("common.readError")}</p>
             <p className="mt-1 break-all text-xs text-muted-foreground">{dir.error}</p>
             <Button variant="outline" size="sm" className="mt-3" onClick={() => void load(dir.path)}>
-              重试
+              {t("common.retry")}
             </Button>
           </div>
         ) : dir.loading ? (
@@ -312,9 +316,9 @@ export function FilesView({
           </div>
         ) : sorted.length === 0 ? (
           <div className="grid place-items-center gap-2 py-24 text-center">
-            <span className="text-sm text-muted-foreground">这个目录是空的</span>
+            <span className="text-sm text-muted-foreground">{t("files.emptyDir")}</span>
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setDialog({ kind: "upload" })}>
-              <UploadIcon className="size-4" /> 上传第一个文件
+              <UploadIcon className="size-4" /> {t("files.uploadFirst")}
             </Button>
           </div>
         ) : (
@@ -322,7 +326,7 @@ export function FilesView({
             <thead className="sticky top-0 z-10 bg-background/95 backdrop-blur">
               <tr className="border-b text-left text-[11.5px] text-muted-foreground">
                 <th className="w-10 px-2 py-2">
-                  <Checkbox checked={allChecked} onCheckedChange={() => toggleAll()} aria-label="全选本页" />
+                  <Checkbox checked={allChecked} onCheckedChange={() => toggleAll()} aria-label={t("files.selectAll")} />
                 </th>
                 <th
                   className="cursor-pointer px-4 py-2 font-medium"
@@ -330,7 +334,7 @@ export function FilesView({
                     setSort((s) => ({ key: "name", dir: s.key === "name" && s.dir === "asc" ? "desc" : "asc" }))
                   }
                 >
-                  名称
+                  {t("files.colName")}
                 </th>
                 <th
                   className="w-24 cursor-pointer px-2 py-2 text-right font-medium"
@@ -338,7 +342,7 @@ export function FilesView({
                     setSort((s) => ({ key: "size", dir: s.key === "size" && s.dir === "desc" ? "asc" : "desc" }))
                   }
                 >
-                  大小
+                  {t("files.colSize")}
                 </th>
                 <th
                   className="w-32 cursor-pointer px-2 py-2 font-medium"
@@ -346,7 +350,7 @@ export function FilesView({
                     setSort((s) => ({ key: "mtime", dir: s.key === "mtime" && s.dir === "desc" ? "asc" : "desc" }))
                   }
                 >
-                  修改时间
+                  {t("files.colMtime")}
                 </th>
                 <th className="w-12 px-2 py-2" />
               </tr>
@@ -369,7 +373,7 @@ export function FilesView({
                       <Checkbox
                         checked={checked}
                         onCheckedChange={() => toggleOne(id)}
-                        aria-label={"选择 " + item.file_name}
+                        aria-label={t("files.selectItem", { name: item.file_name })}
                       />
                     </td>
                     <td className="max-w-0 px-4 py-2">
@@ -377,11 +381,11 @@ export function FilesView({
                         {fileIcon(item.file_name, item.dir)}
                         <span className="truncate">{item.file_name}</span>
                         {!item.dir && isEncrypted(item.file_name) && (
-                          <Lock className="size-3 shrink-0 text-primary/70" aria-label="已加密" />
+                          <Lock className="size-3 shrink-0 text-primary/70" aria-label={t("files.encrypted")} />
                         )}
                         {item.dir && (
                           <Badge variant="muted" className="ml-1 hidden shrink-0 group-hover:inline-flex">
-                            文件夹
+                            {t("common.folder")}
                           </Badge>
                         )}
                       </button>
@@ -392,7 +396,7 @@ export function FilesView({
                     <td className="px-2 py-2 text-xs text-muted-foreground">
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <span>{relativeTime(item.mtime || item.updated_at)}</span>
+                          <span>{relativeTime(item.mtime || item.updated_at, lang)}</span>
                         </TooltipTrigger>
                         <TooltipContent>{formatTime(item.mtime || item.updated_at)}</TooltipContent>
                       </Tooltip>
@@ -411,38 +415,38 @@ export function FilesView({
                         <DropdownMenuContent align="end" className="w-44">
                           {item.dir && (
                             <DropdownMenuItem onClick={() => openItem(item)}>
-                              <ChevronRight className="size-4" /> 打开
+                              <ChevronRight className="size-4" /> {t("files.open")}
                             </DropdownMenuItem>
                           )}
                           <DropdownMenuItem onClick={() => setDialog({ kind: "info", target: item })}>
-                            <Info className="size-4" /> 详情
+                            <Info className="size-4" /> {t("files.details")}
                           </DropdownMenuItem>
                           {!item.dir && (
                             <DropdownMenuItem onClick={() => setDialog({ kind: "download", target: item })}>
-                              <Download className="size-4" /> 下载
+                              <Download className="size-4" /> {t("files.download")}
                             </DropdownMenuItem>
                           )}
                           {!item.dir && isEncrypted(item.file_name) && (
                             <DropdownMenuItem onClick={() => setDialog({ kind: "decrypt", target: item })}>
-                              <Unlock className="size-4" /> 解密到本机…
+                              <Unlock className="size-4" /> {t("files.decryptLocal")}
                             </DropdownMenuItem>
                           )}
                           <DropdownMenuItem onClick={() => setDialog({ kind: "share", target: item })}>
-                            <Link2 className="size-4" /> 创建分享
+                            <Link2 className="size-4" /> {t("files.createShare")}
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem onClick={() => setDialog({ kind: "rename", target: item })}>
-                            <Pencil className="size-4" /> 重命名
+                            <Pencil className="size-4" /> {t("files.rename")}
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => setDialog({ kind: "move", target: item })}>
-                            <Scissors className="size-4" /> 移动
+                            <Scissors className="size-4" /> {t("files.move")}
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => setDialog({ kind: "copy", target: item })}>
-                            <Copy className="size-4" /> 复制
+                            <Copy className="size-4" /> {t("files.copy")}
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem variant="destructive" onClick={() => setConfirmDelete(item)}>
-                            <Trash2 className="size-4" /> 删除
+                            <Trash2 className="size-4" /> {t("files.delete")}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -458,20 +462,20 @@ export function FilesView({
       <CommandDialog
         open={dialog.kind === "create"}
         onOpenChange={(o) => !o && close()}
-        title="新建文件夹"
-        description={'在 ' + dir.path + ' 下创建'}
+        title={t("files.newFolder")}
+        description={t("files.createUnder", { path: dir.path })}
         cmd="create"
         args={argsOf("create")}
         preset={{ pdir: dir.path }}
         hide={["pdir"]}
-        submitLabel="创建"
+        submitLabel={t("files.create")}
         onSuccess={() => void load(dir.path)}
       />
 
       <CommandDialog
         open={dialog.kind === "rename"}
         onOpenChange={(o) => !o && close()}
-        title="重命名"
+        title={t("files.rename")}
         cmd="rename"
         args={argsOf("rename")}
         preset={
@@ -480,49 +484,49 @@ export function FilesView({
             : undefined
         }
         hide={["path"]}
-        submitLabel="重命名"
+        submitLabel={t("files.rename")}
         onSuccess={() => void load(dir.path)}
       />
 
       <CommandDialog
         open={dialog.kind === "move"}
         onOpenChange={(o) => !o && close()}
-        title="移动到…"
-        description="目标目录必须已存在"
+        title={t("files.moveTo")}
+        description={t("files.targetMustExist")}
         cmd="move"
         args={argsOf("move")}
         preset={dialog.kind === "move" ? { src: targetPath(dialog), dest: dir.path } : undefined}
         hide={["src"]}
-        submitLabel="移动"
+        submitLabel={t("files.move")}
         onSuccess={() => void load(dir.path)}
       />
 
       <CommandDialog
         open={dialog.kind === "copy"}
         onOpenChange={(o) => !o && close()}
-        title="复制到…"
-        description="目标目录必须已存在"
+        title={t("files.copyTo")}
+        description={t("files.targetMustExist")}
         cmd="copy"
         args={argsOf("copy")}
         preset={dialog.kind === "copy" ? { src: targetPath(dialog), dest: dir.path } : undefined}
         hide={["src"]}
-        submitLabel="复制"
+        submitLabel={t("files.copy")}
         onSuccess={() => void load(dir.path)}
       />
 
       <CommandDialog
         open={dialog.kind === "share"}
         onOpenChange={(o) => !o && close()}
-        title="创建分享链接"
+        title={t("files.createShareLink")}
         cmd="share"
         args={argsOf("share")}
         preset={dialog.kind === "share" ? { path: targetPath(dialog) } : undefined}
-        submitLabel="创建分享"
+        submitLabel={t("files.createShare")}
         onSuccess={(data) => {
           const url = (data as { share_url?: string } | null)?.share_url;
           if (url) {
             void navigator.clipboard?.writeText(url).catch(() => {});
-            toast.success("分享链接已复制到剪贴板", { description: url });
+            toast.success(t("files.shareCopied"), { description: url });
           }
         }}
       />
@@ -530,13 +534,13 @@ export function FilesView({
       <CommandDialog
         open={dialog.kind === "download"}
         onOpenChange={(o) => !o && close()}
-        title="下载到本机"
-        description="填本机目录（不存在会自动创建）；留空则用 kuake 的默认下载位置"
+        title={t("files.downloadToLocal")}
+        description={t("files.downloadHint")}
         cmd="download"
         args={argsOf("download")}
         preset={dialog.kind === "download" ? { path: targetPath(dialog) } : undefined}
         hide={["path"]}
-        submitLabel="下载"
+        submitLabel={t("files.download")}
       />
 
       <DecryptDialog
@@ -563,22 +567,22 @@ export function FilesView({
       <ConfirmDialog
         open={confirmDelete !== null}
         onOpenChange={(o) => !o && setConfirmDelete(null)}
-        title="确认删除？"
+        title={t("files.confirmDelete")}
         description={
           <>
             <span className="break-all font-mono">
               {confirmDelete ? pathOf(confirmDelete) : ""}
             </span>
             <br />
-            目录会连同内容一起进回收站，客户端内无法恢复。
+            {t("files.deleteHint")}
           </>
         }
-        confirmLabel="删除"
+        confirmLabel={t("files.delete")}
         onConfirm={async () => {
           if (!confirmDelete) return;
           try {
-            await run("delete", { path: pathOf(confirmDelete) }, "删除");
-            toast.success("已删除");
+            await run("delete", { path: pathOf(confirmDelete) }, t("op.delete"));
+            toast.success(t("files.deleted"));
             await load(dir.path);
           } catch (e) {
             toast.error(e instanceof Error ? e.message : String(e));
@@ -590,13 +594,13 @@ export function FilesView({
       <CommandDialog
         open={dialog.kind === "batch-move"}
         onOpenChange={(o) => !o && close()}
-        title="批量移动到…"
-        description={"将已选 " + selected.length + " 项移动到目标目录（须已存在）"}
+        title={t("files.batchMoveTo")}
+        description={t("files.batchMoveDesc", { n: selected.length })}
         cmd="batch-move"
         args={argsOf("batch-move")}
         preset={{ paths: selectedPaths, dest: dir.path }}
         hide={["paths"]}
-        submitLabel="批量移动"
+        submitLabel={t("files.batchMove")}
         onSuccess={() => {
           setSelected([]);
           void load(dir.path);
@@ -606,13 +610,13 @@ export function FilesView({
       <CommandDialog
         open={dialog.kind === "batch-copy"}
         onOpenChange={(o) => !o && close()}
-        title="批量复制到…"
-        description={"将已选 " + selected.length + " 项复制到目标目录（须已存在）"}
+        title={t("files.batchCopyTo")}
+        description={t("files.batchCopyDesc", { n: selected.length })}
         cmd="batch-copy"
         args={argsOf("batch-copy")}
         preset={{ paths: selectedPaths, dest: dir.path }}
         hide={["paths"]}
-        submitLabel="批量复制"
+        submitLabel={t("files.batchCopy")}
         onSuccess={() => {
           setSelected([]);
           void load(dir.path);
@@ -622,27 +626,27 @@ export function FilesView({
       <ConfirmDialog
         open={confirmBatchDelete}
         onOpenChange={(o) => !o && setConfirmBatchDelete(false)}
-        title="确认批量删除？"
+        title={t("files.confirmBatchDelete")}
         description={
           <>
-            <span>共 {selected.length} 项：</span>
+            <span>{t("files.batchCount", { n: selected.length })}</span>
             <ul className="mt-1 max-h-32 overflow-auto font-mono text-xs">
               {selectedPaths.slice(0, 8).map((p) => (
                 <li key={p} className="break-all">{p}</li>
               ))}
-              {selectedPaths.length > 8 ? <li>… 还有 {selectedPaths.length - 8} 项</li> : null}
+              {selectedPaths.length > 8 ? <li>{t("files.moreItems", { n: selectedPaths.length - 8 })}</li> : null}
             </ul>
             <br />
-            会一次性全部放进回收站，目录会连同内容一起删除。
+            {t("files.batchDeleteHint")}
           </>
         }
-        confirmLabel="批量删除"
+        confirmLabel={t("files.batchDelete")}
         onConfirm={async () => {
           const paths = selectedPaths;
           if (paths.length === 0) return;
           try {
-            await run("batch-delete", { paths }, "批量删除");
-            toast.success("已删除 " + paths.length + " 项");
+            await run("batch-delete", { paths }, t("op.batchDelete"));
+            toast.success(t("files.deletedN", { n: paths.length }));
             setSelected([]);
             await load(dir.path);
           } catch (e) {

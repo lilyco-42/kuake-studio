@@ -1,3 +1,6 @@
+/** 语言标识。零依赖，供纯函数（format.ts）与 React provider 共用。 */
+export type Lang = "zh-CN" | "en";
+
 /** i18n 插值：把 {key} 替换掉；未提供的占位保持原样。零依赖，便于 bun test。 */
 export function interpolate(
   template: string,

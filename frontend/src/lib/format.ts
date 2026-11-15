@@ -1,3 +1,6 @@
+import { interpolate, type Lang } from "@/lib/i18n-core";
+import { zh, en } from "@/lib/i18n-dict";
+
 /** 字节数 → 人类可读（1024 进制，网盘口径） */
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes == null || Number.isNaN(bytes)) return "—";
@@ -24,16 +27,17 @@ export function formatTime(ts: number | null | undefined): string {
   )}`;
 }
 
-export function relativeTime(ts: number | null | undefined): string {
+export function relativeTime(ts: number | null | undefined, lang: Lang = "zh-CN"): string {
   if (!ts) return "—";
+  const d = lang === "en" ? en : zh;
   const ms = ts > 1e12 ? ts : ts * 1000;
   const diff = Date.now() - ms;
   if (diff < 0) return formatTime(ts);
   const min = 60_000;
-  if (diff < min) return "刚刚";
-  if (diff < 60 * min) return `${Math.floor(diff / min)} 分钟前`;
-  if (diff < 24 * 60 * min) return `${Math.floor(diff / (60 * min))} 小时前`;
-  if (diff < 30 * 24 * 60 * min) return `${Math.floor(diff / (24 * 60 * min))} 天前`;
+  if (diff < min) return d["time.justNow"];
+  if (diff < 60 * min) return interpolate(d["time.minAgo"], { n: Math.floor(diff / min) });
+  if (diff < 24 * 60 * min) return interpolate(d["time.hourAgo"], { n: Math.floor(diff / (60 * min)) });
+  if (diff < 30 * 24 * 60 * min) return interpolate(d["time.dayAgo"], { n: Math.floor(diff / (24 * 60 * min)) });
   return formatTime(ts);
 }
 
@@ -50,8 +54,9 @@ export function parentPath(path: string): string {
   return clean.slice(0, idx);
 }
 
-export function splitPath(path: string): { label: string; path: string }[] {
-  const crumbs: { label: string; path: string }[] = [{ label: "根目录", path: "/" }];
+export function splitPath(path: string, lang: Lang = "zh-CN"): { label: string; path: string }[] {
+  const d = lang === "en" ? en : zh;
+  const crumbs: { label: string; path: string }[] = [{ label: d["format.root"], path: "/" }];
   const parts = path.split("/").filter(Boolean);
   let acc = "";
   for (const p of parts) {

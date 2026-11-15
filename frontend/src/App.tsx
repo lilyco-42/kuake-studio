@@ -205,7 +205,7 @@ export default function App() {
             <div className="hidden px-2 pb-1 text-[10.5px] leading-4 text-muted-foreground md:block">
               <p className="truncate">{info?.name ?? "kuake-studio"}</p>
               <p className="truncate">
-                {info?.backend === "cli" ? "kuake CLI 子进程" : "内置原生 API"} · v{info?.version ?? "?"}
+                {t(info?.backend === "cli" ? "about.cli" : "about.native")} · v{info?.version ?? "?"}
               </p>
             </div>
           </div>

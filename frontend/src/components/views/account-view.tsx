@@ -9,11 +9,13 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LoginDialog } from "@/components/login-dialog";
 import { useRunner } from "@/lib/store";
+import { useI18n } from "@/lib/i18n";
 import { formatBytes, formatTime } from "@/lib/format";
 import type { KuakeUser } from "@/lib/types";
 
 export function AccountView() {
   const { run, booted, info } = useRunner();
+  const { t } = useI18n();
   const [user, setUser] = React.useState<KuakeUser | null>(null);
   const [version, setVersion] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -25,8 +27,8 @@ export function AccountView() {
     setError(null);
     try {
       const [u, v] = await Promise.all([
-        run<KuakeUser>("user", {}, "账号信息"),
-        run<{ version?: string }>("version", {}, "kuake 版本"),
+        run<KuakeUser>("user", {}, t("op.user")),
+        run<{ version?: string }>("version", {}, t("op.version")),
       ]);
       setUser(u);
       setVersion(v?.version ?? null);
@@ -35,7 +37,7 @@ export function AccountView() {
     } finally {
       setLoading(false);
     }
-  }, [run]);
+  }, [run, t]);
 
   React.useEffect(() => {
     if (booted) void load();
@@ -51,17 +53,17 @@ export function AccountView() {
       <div className="mx-auto grid max-w-3xl gap-4">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-medium">账号</h2>
-            <p className="text-[11.5px] text-muted-foreground">容量、会员状态与运行环境</p>
+            <h2 className="text-sm font-medium">{t("nav.account")}</h2>
+            <p className="text-[11.5px] text-muted-foreground">{t("account.subtitle")}</p>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setLoginOpen(true)}>
               <QrCode className="size-4" />
-              扫码登录
+              {t("account.qrLogin")}
             </Button>
             <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void load()} disabled={loading}>
               <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
-              刷新
+              {t("common.refresh")}
             </Button>
           </div>
         </div>
@@ -70,7 +72,7 @@ export function AccountView() {
           <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3">
             <p className="text-xs text-destructive">{error}</p>
             <p className="mt-1 text-[11px] text-muted-foreground">
-              多为登录态过期。点右上角「扫码登录」即可刷新；或更新 KUAKE_COOKIE 后重启。
+              {t("account.errorHint")}
             </p>
           </div>
         )}
@@ -79,7 +81,7 @@ export function AccountView() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <User className="size-4" />
-              {loading && !user ? <Skeleton className="h-5 w-28" /> : (user?.nickname ?? "未知账号")}
+              {loading && !user ? <Skeleton className="h-5 w-28" /> : (user?.nickname ?? t("account.unknown"))}
             </CardTitle>
             <CardDescription className="flex flex-wrap items-center gap-2">
               {user?.member_type && (
@@ -89,7 +91,7 @@ export function AccountView() {
                 </Badge>
               )}
               {user?.super_vip_exp_at ? (
-                <span>会员到期 {formatTime(user.super_vip_exp_at)}</span>
+                <span>{t("account.vipExp", { time: formatTime(user.super_vip_exp_at) })}</span>
               ) : null}
             </CardDescription>
           </CardHeader>
@@ -97,7 +99,7 @@ export function AccountView() {
             <div className="flex items-end justify-between text-xs">
               <span className="flex items-center gap-1.5 text-muted-foreground">
                 <HardDrive className="size-3.5" />
-                容量
+                {t("account.capacity")}
               </span>
               <span className="tabular">
                 {formatBytes(used)} / {formatBytes(total)} · {pct.toFixed(1)}%
@@ -105,7 +107,7 @@ export function AccountView() {
             </div>
             <Progress value={pct} />
             <p className="text-[11px] text-muted-foreground">
-              剩余 {formatBytes(Math.max(0, total - used))}
+              {t("account.remaining", { size: formatBytes(Math.max(0, total - used)) })}
             </p>
           </CardContent>
         </Card>
@@ -114,21 +116,21 @@ export function AccountView() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
               <Terminal className="size-4" />
-              运行环境
+              {t("account.runtime")}
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-2 text-xs">
-            <Row k="网盘后端" v={info?.backend === "cli" ? "kuake CLI 子进程" : "内置原生 API（无需 kuake.exe）"} />
+            <Row k={t("about.backend")} v={t(info?.backend === "cli" ? "about.cli" : "about.native")} />
             <Separator />
-            <Row k="后端版本" v={version ?? (loading ? "读取中…" : "—")} />
+            <Row k={t("account.backendVersion")} v={version ?? (loading ? t("account.reading") : "—")} />
             <Separator />
             {info?.backend === "cli" && (
               <>
-                <Row k="kuake 路径" v={info?.kuake ?? "—"} mono />
+                <Row k={t("account.kuakePath")} v={info?.kuake ?? "—"} mono />
                 <Separator />
               </>
             )}
-            <Row k="客户端版本" v={info ? info.version : "—"} mono />
+            <Row k={t("about.version")} v={info ? info.version : "—"} mono />
           </CardContent>
         </Card>
 

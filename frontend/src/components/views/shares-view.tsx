@@ -17,12 +17,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CommandDialog } from "@/components/command-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useRunner } from "@/lib/store";
+import { useI18n } from "@/lib/i18n";
 import { formatTime, relativeTime } from "@/lib/format";
 import type { CommandSchema, KuakeShare } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function SharesView({ schemas }: { schemas: CommandSchema[] }) {
   const { run, booted } = useRunner();
+  const { t, lang } = useI18n();
   const [shares, setShares] = React.useState<KuakeShare[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
@@ -39,7 +41,7 @@ export function SharesView({ schemas }: { schemas: CommandSchema[] }) {
     setLoading(true);
     setError(null);
     try {
-      const data = await run<{ list: KuakeShare[] }>("share-list", { page: 1, size: 50 }, "分享列表");
+      const data = await run<{ list: KuakeShare[] }>("share-list", { page: 1, size: 50 }, t("op.list"));
       setShares(data?.list ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -47,7 +49,7 @@ export function SharesView({ schemas }: { schemas: CommandSchema[] }) {
     } finally {
       setLoading(false);
     }
-  }, [run]);
+  }, [run, t]);
 
   React.useEffect(() => {
     if (booted) void load();
@@ -60,10 +62,10 @@ export function SharesView({ schemas }: { schemas: CommandSchema[] }) {
     try {
       await navigator.clipboard.writeText(url);
       setCopiedId(s.share_id ?? s.pwd_id ?? url);
-      toast.success("链接已复制");
+      toast.success(t("shares.copied"));
       setTimeout(() => setCopiedId(null), 1600);
     } catch {
-      toast.error("剪贴板不可用，请手动复制");
+      toast.error(t("common.clipboardFail"));
     }
   };
 
@@ -74,18 +76,18 @@ export function SharesView({ schemas }: { schemas: CommandSchema[] }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 border-b px-4 py-2.5">
         <div className="min-w-0">
-          <h2 className="text-sm font-medium">我的分享</h2>
+          <h2 className="text-sm font-medium">{t("shares.title")}</h2>
           <p className="text-[11.5px] text-muted-foreground">
-            共 {shares.length} 条 · 取消后链接立即失效
+            {t("shares.subtitle", { n: shares.length })}
           </p>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
-          <Button variant="ghost" size="icon-sm" onClick={() => void load()} title="刷新">
+          <Button variant="ghost" size="icon-sm" onClick={() => void load()} title={t("common.refresh")}>
             <RefreshCw className={cn("size-4", loading && "animate-spin")} />
           </Button>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setSaveOpen(true)}>
             <DownloadCloud className="size-4" />
-            转存他人分享
+            {t("shares.save")}
           </Button>
         </div>
       </div>
@@ -93,10 +95,10 @@ export function SharesView({ schemas }: { schemas: CommandSchema[] }) {
       <ScrollArea className="min-h-0 flex-1">
         {error ? (
           <div className="m-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
-            <p className="text-sm font-medium text-destructive">读取失败</p>
+            <p className="text-sm font-medium text-destructive">{t("common.readError")}</p>
             <p className="mt-1 break-all text-xs text-muted-foreground">{error}</p>
             <Button variant="outline" size="sm" className="mt-3" onClick={() => void load()}>
-              重试
+              {t("common.retry")}
             </Button>
           </div>
         ) : loading ? (
@@ -108,8 +110,8 @@ export function SharesView({ schemas }: { schemas: CommandSchema[] }) {
         ) : shares.length === 0 ? (
           <div className="grid place-items-center gap-2 py-24 text-center">
             <Link2 className="size-8 text-muted-foreground/50" />
-            <span className="text-sm text-muted-foreground">还没有分享链接</span>
-            <span className="text-xs text-muted-foreground">在「文件」里选一个文件或文件夹即可创建</span>
+            <span className="text-sm text-muted-foreground">{t("shares.empty")}</span>
+            <span className="text-xs text-muted-foreground">{t("shares.emptyHint")}</span>
           </div>
         ) : (
           <ul className="divide-y">
@@ -124,36 +126,36 @@ export function SharesView({ schemas }: { schemas: CommandSchema[] }) {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="truncate text-sm font-medium">
-                        {s.title || s.first_file?.file_name || "未命名分享"}
+                        {s.title || s.first_file?.file_name || t("shares.unnamed")}
                       </span>
                       {expired ? (
-                        <Badge variant="destructive">已过期</Badge>
+                        <Badge variant="destructive">{t("shares.expired")}</Badge>
                       ) : (
-                        <Badge variant="success">有效</Badge>
+                        <Badge variant="success">{t("shares.active")}</Badge>
                       )}
                       {typeof s.file_num === "number" && s.file_num > 1 && (
-                        <Badge variant="muted">{s.file_num} 项</Badge>
+                        <Badge variant="muted">{t("shares.itemsN", { n: s.file_num })}</Badge>
                       )}
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-muted-foreground">
                       <span className="truncate font-mono">{s.share_url}</span>
-                      <span>创建 {relativeTime(s.created_at)}</span>
-                      {s.expired_at ? <span>到期 {formatTime(s.expired_at)}</span> : null}
-                      <span>浏览 {Math.max(0, s.click_pv ?? 0)}</span>
-                      <span>转存 {Math.max(0, s.save_pv ?? 0)}</span>
+                      <span>{t("shares.created", { time: relativeTime(s.created_at, lang) })}</span>
+                      {s.expired_at ? <span>{t("shares.expires", { time: formatTime(s.expired_at) })}</span> : null}
+                      <span>{t("shares.views", { n: Math.max(0, s.click_pv ?? 0) })}</span>
+                      <span>{t("shares.saves", { n: Math.max(0, s.save_pv ?? 0) })}</span>
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      title="复制链接"
+                      title={t("shares.copyLink")}
                       onClick={() => void copy(s)}
                     >
                       {copiedId === id ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
                     </Button>
                     {s.share_url && (
-                      <Button variant="ghost" size="icon-sm" asChild title="在浏览器打开">
+                      <Button variant="ghost" size="icon-sm" asChild title={t("shares.openInBrowser")}>
                         <a href={s.share_url} target="_blank" rel="noreferrer">
                           <ExternalLink className="size-4" />
                         </a>
@@ -162,7 +164,7 @@ export function SharesView({ schemas }: { schemas: CommandSchema[] }) {
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      title="取消分享"
+                      title={t("shares.revoke")}
                       onClick={() => setRevoke(s)}
                     >
                       <Link2Off className="size-4 text-destructive" />
@@ -178,33 +180,33 @@ export function SharesView({ schemas }: { schemas: CommandSchema[] }) {
       <CommandDialog
         open={saveOpen}
         onOpenChange={setSaveOpen}
-        title="转存他人分享"
-        description="把别人分享的文件保存到你的网盘"
+        title={t("shares.save")}
+        description={t("shares.saveDesc")}
         cmd="share-save"
         args={argsOf("share-save")}
-        submitLabel="转存"
+        submitLabel={t("shares.saveBtn")}
         onSuccess={() => void load()}
       />
 
       <ConfirmDialog
         open={revoke !== null}
         onOpenChange={(o) => !o && setRevoke(null)}
-        title="取消这条分享？"
+        title={t("shares.confirmRevoke")}
         description={
           <>
             <span className="break-all font-mono">{revoke?.share_url ?? revoke?.title}</span>
             <br />
-            取消后链接立刻失效，已转存的人不受影响。
+            {t("shares.revokeHint")}
           </>
         }
-        confirmLabel="取消分享"
+        confirmLabel={t("shares.revoke")}
         onConfirm={async () => {
           const target = revoke;
           if (!target) return;
           const key = target.share_id ?? target.pwd_id;
           try {
-            await run("share-delete", { targets: key ? [key] : [] }, "取消分享");
-            toast.success("已取消");
+            await run("share-delete", { targets: key ? [key] : [] }, t("shares.revoke"));
+            toast.success(t("shares.revoked"));
             await load();
           } catch (e) {
             toast.error(e instanceof Error ? e.message : String(e));

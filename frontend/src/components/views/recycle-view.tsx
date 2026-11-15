@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { fileIcon } from "@/components/file-icon";
 import { useRunner } from "@/lib/store";
+import { useI18n } from "@/lib/i18n";
 import { formatBytes, formatTime, relativeTime } from "@/lib/format";
 import type { RecycleData, RecycleItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,7 @@ type Pending = { kind: "restore" | "purge"; items: RecycleItem[] };
 
 export function RecycleView() {
   const { run, booted } = useRunner();
+  const { t, lang } = useI18n();
   const [items, setItems] = React.useState<RecycleItem[]>([]);
   const [total, setTotal] = React.useState(0);
   const [deep, setDeep] = React.useState(0);
@@ -39,17 +41,17 @@ export function RecycleView() {
         { page: nextPage, size: PAGE_SIZE },
         label,
       );
-      if (!data) throw new Error("后端没有返回数据");
+      if (!data) throw new Error(t("common.noData"));
       return data;
     },
-    [run],
+    [run, t],
   );
 
   const load = React.useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await drain(1, "回收站列表");
+      const data = await drain(1, t("recycle.listOp"));
       setItems(data.list ?? []);
       setTotal(data.total ?? (data.list ?? []).length);
       setDeep(data.deep_recycle_count ?? 0);
@@ -67,7 +69,7 @@ export function RecycleView() {
     } finally {
       setLoading(false);
     }
-  }, [drain]);
+  }, [drain, t]);
 
   React.useEffect(() => {
     if (booted) void load();
@@ -77,7 +79,7 @@ export function RecycleView() {
   const loadMore = async () => {
     setLoadingMore(true);
     try {
-      const data = await drain(page + 1, "回收站列表（更多）");
+      const data = await drain(page + 1, t("recycle.listMore"));
       setItems((cur) => {
         const seen = new Set(cur.map((it) => it.record_id));
         return [...cur, ...(data.list ?? []).filter((it) => !seen.has(it.record_id))];
@@ -108,14 +110,14 @@ export function RecycleView() {
     const ids = job.items.map((it) => it.record_id);
     if (ids.length === 0) return;
     if (job.kind === "purge" && ids.length > MAX_PURGE_ONCE) {
-      toast.error(`一次最多永久删除 ${MAX_PURGE_ONCE} 项，请分批操作`);
+      toast.error(t("recycle.maxPurge", { n: MAX_PURGE_ONCE }));
       setPending(null);
       return;
     }
     try {
-      const verb = job.kind === "purge" ? "永久删除" : "恢复";
-      await run(job.kind === "purge" ? "recycle-purge" : "recycle-restore", { records: ids }, verb);
-      toast.success(`已${verb} ${ids.length} 项`);
+      const purge = job.kind === "purge";
+      await run(purge ? "recycle-purge" : "recycle-restore", { records: ids }, t(purge ? "recycle.purge" : "recycle.restore"));
+      toast.success(t(purge ? "recycle.donePurge" : "recycle.doneRestore", { n: ids.length }));
       setSelected([]);
       await load();
     } catch (e) {
@@ -128,17 +130,17 @@ export function RecycleView() {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2 border-b px-4 py-2.5">
         <div className="min-w-0">
-          <h2 className="text-sm font-medium">回收站</h2>
+          <h2 className="text-sm font-medium">{t("nav.recycle")}</h2>
           <p className="text-[11.5px] text-muted-foreground">
-            {total > 0 ? `共 ${total} 项` : "空"} · 删除后保留 30 天，之后自动清除
-            {deep > 0 ? ` · 深度回收站还有 ${deep} 项` : ""}
+            {total > 0 ? t("recycle.count", { n: total }) : t("recycle.empty")} · {t("recycle.keepHint")}
+            {deep > 0 ? " · " + t("recycle.deep", { n: deep }) : ""}
           </p>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
           {selected.length > 0 ? (
             <>
               <span className="hidden text-[11.5px] text-muted-foreground sm:inline">
-                已选 {selected.length} 项
+                {t("common.selected", { n: selected.length })}
               </span>
               <Button
                 variant="outline"
@@ -147,7 +149,7 @@ export function RecycleView() {
                 onClick={() => setPending({ kind: "restore", items: chosen })}
               >
                 <RotateCcw className="size-4" />
-                恢复
+                {t("recycle.restore")}
               </Button>
               <Button
                 variant="outline"
@@ -156,14 +158,14 @@ export function RecycleView() {
                 onClick={() => setPending({ kind: "purge", items: chosen })}
               >
                 <Trash2 className="size-4" />
-                永久删除
+                {t("recycle.purge")}
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setSelected([])}>
-                清空选择
+                {t("common.clearSelection")}
               </Button>
             </>
           ) : null}
-          <Button variant="ghost" size="icon-sm" onClick={() => void load()} title="刷新">
+          <Button variant="ghost" size="icon-sm" onClick={() => void load()} title={t("common.refresh")}>
             <RefreshCw className={cn("size-4", loading && "animate-spin")} />
           </Button>
         </div>
@@ -172,10 +174,10 @@ export function RecycleView() {
       <ScrollArea className="min-h-0 flex-1">
         {error ? (
           <div className="m-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
-            <p className="text-sm font-medium text-destructive">读取失败</p>
+            <p className="text-sm font-medium text-destructive">{t("common.readError")}</p>
             <p className="mt-1 break-all text-xs text-muted-foreground">{error}</p>
             <Button variant="outline" size="sm" className="mt-3" onClick={() => void load()}>
-              重试
+              {t("common.retry")}
             </Button>
           </div>
         ) : loading ? (
@@ -187,8 +189,8 @@ export function RecycleView() {
         ) : items.length === 0 ? (
           <div className="grid place-items-center gap-2 py-24 text-center">
             <Trash className="size-8 text-muted-foreground/50" />
-            <span className="text-sm text-muted-foreground">回收站是空的</span>
-            <span className="text-xs text-muted-foreground">在「文件」里删除的东西会先放到这里</span>
+            <span className="text-sm text-muted-foreground">{t("recycle.emptyTitle")}</span>
+            <span className="text-xs text-muted-foreground">{t("recycle.emptyHint")}</span>
           </div>
         ) : (
           <>
@@ -196,10 +198,10 @@ export function RecycleView() {
               <Checkbox
                 checked={allChecked}
                 onCheckedChange={() => toggleAll()}
-                aria-label="全选"
+                aria-label={t("recycle.selectAll")}
               />
               <span className="text-[11.5px] text-muted-foreground">
-                {allChecked ? "取消全选" : "全选本页"}
+                {allChecked ? t("recycle.deselectAll") : t("recycle.selectPage")}
               </span>
             </div>
             <ul className="divide-y">
@@ -217,7 +219,7 @@ export function RecycleView() {
                     <Checkbox
                       checked={checked}
                       onCheckedChange={() => toggleOne(it.record_id)}
-                      aria-label={`选择 ${it.file_name}`}
+                      aria-label={t("recycle.selectItem", { name: it.file_name })}
                     />
                     <div className="grid size-9 shrink-0 place-items-center rounded-md bg-muted">
                       {fileIcon(it.file_name, it.dir, "size-4 text-muted-foreground")}
@@ -227,25 +229,25 @@ export function RecycleView() {
                         <span className="truncate text-sm font-medium">{it.file_name}</span>
                         {urgent ? (
                           <Badge variant="destructive">
-                            {it.remain_days <= 0 ? "即将清除" : `还剩 ${it.remain_days} 天`}
+                            {it.remain_days <= 0 ? t("recycle.clearing") : t("recycle.remain", { n: it.remain_days })}
                           </Badge>
                         ) : (
-                          <Badge variant="muted">还剩 {it.remain_days} 天</Badge>
+                          <Badge variant="muted">{t("recycle.remain", { n: it.remain_days })}</Badge>
                         )}
                       </div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-muted-foreground">
-                        <span>{it.dir ? "文件夹" : formatBytes(it.size)}</span>
+                        <span>{it.dir ? t("common.folder") : formatBytes(it.size)}</span>
                         <span title={formatTime(it.deleted_at)}>
-                          删除于 {relativeTime(it.deleted_at)}
+                          {t("recycle.deletedAt", { time: relativeTime(it.deleted_at, lang) })}
                         </span>
-                        <span>到期 {formatTime(it.move_deep_recycle_at)}</span>
+                        <span>{t("recycle.expiresAt", { time: formatTime(it.move_deep_recycle_at) })}</span>
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        title="恢复这项"
+                        title={t("recycle.restoreOne")}
                         onClick={() => setPending({ kind: "restore", items: [it] })}
                       >
                         <RotateCcw className="size-4" />
@@ -253,7 +255,7 @@ export function RecycleView() {
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        title="永久删除这项"
+                        title={t("recycle.purgeOne")}
                         onClick={() => setPending({ kind: "purge", items: [it] })}
                       >
                         <Trash2 className="size-4 text-destructive" />
@@ -271,7 +273,7 @@ export function RecycleView() {
                   disabled={loadingMore}
                   onClick={() => void loadMore()}
                 >
-                  {loadingMore ? "加载中…" : "加载更多"}
+                  {loadingMore ? t("common.loading") : t("common.loadMore")}
                 </Button>
               </div>
             ) : null}
@@ -282,22 +284,20 @@ export function RecycleView() {
       <ConfirmDialog
         open={pending !== null}
         onOpenChange={(o) => !o && setPending(null)}
-        title={pending?.kind === "purge" ? "永久删除这些条目？" : "恢复到原目录？"}
+        title={pending?.kind === "purge" ? t("recycle.confirmPurge") : t("recycle.confirmRestore")}
         description={
           <>
-            共 <b>{pending?.items.length ?? 0}</b> 项
-            {pending && pending.items.length <= 3 ? (
-              <>
-                ：<span className="break-all">{pending.items.map((it) => it.file_name).join("、")}</span>
-              </>
-            ) : null}
+            {pending && pending.items.length <= 3
+              ? t("recycle.confirmList", {
+                  n: pending.items.length,
+                  list: pending.items.map((it) => it.file_name).join(lang === "en" ? ", " : "、"),
+                })
+              : t("recycle.confirmCount", { n: pending?.items.length ?? 0 })}
             <br />
-            {pending?.kind === "purge"
-              ? "永久删除后无法恢复，也无法再从回收站找回。"
-              : "文件会回到删除前所在的目录。"}
+            {pending?.kind === "purge" ? t("recycle.purgeHint") : t("recycle.restoreHint")}
           </>
         }
-        confirmLabel={pending?.kind === "purge" ? "永久删除" : "恢复"}
+        confirmLabel={pending?.kind === "purge" ? t("recycle.purge") : t("recycle.restore")}
         destructive={pending?.kind === "purge"}
         onConfirm={doAction}
       />

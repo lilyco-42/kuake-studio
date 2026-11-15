@@ -77,7 +77,7 @@ export function AboutView() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-2 text-sm"><MessageCircle className="size-4 text-primary" /> {t("about.contact")}</CardTitle>
-              <CardDescription className="text-[11px]">微信 / QQ / B 站</CardDescription>
+              <CardDescription className="text-[11px]">{t("about.contactChannels")}</CardDescription>
             </CardHeader>
             <CardContent className="text-xs">
               {contactLines(cfg.contact).map((c) => (
@@ -160,7 +160,7 @@ export function AboutView() {
               <div className="flex flex-wrap gap-1.5">
                 <Badge variant="muted" className="text-[10px]">{t("about.openSource")}</Badge>
                 <Badge variant="muted" className="text-[10px]">{t("about.commercial")}</Badge>
-                <Badge variant="outline" className="text-[10px]">禁止二次贩卖</Badge>
+                <Badge variant="outline" className="text-[10px]">{t("about.noResale")}</Badge>
               </div>
               <p className="leading-5 text-muted-foreground">
                 {lang === "en" ? t("legal.summaryEn") : cfg.legal.summary}
@@ -193,7 +193,7 @@ export function AboutView() {
                 </Button>
               </div>
               <p className="text-[10.5px] leading-4 text-muted-foreground">
-                远端只可改公告 / 启动节奏 / 广告开关，改不了收款码、联系方式与授权状态。
+                {t("about.cloudWhitelist")}
               </p>
             </CardContent>
           </Card>

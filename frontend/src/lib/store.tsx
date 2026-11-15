@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { boot, fetchSchemas, startRun, subscribe } from "@/lib/api";
 import { fetchCommercial } from "@/lib/commercial";
+import { useI18n } from "@/lib/i18n";
 import { OFFLINE_SNAPSHOT, type CommercialSnapshot } from "@/lib/commercial-core";
 import type { CommandSchema, KuakeEnvelope, RunEvent } from "@/lib/types";
 
@@ -52,6 +53,7 @@ export function RunnerProvider({ children }: { children: React.ReactNode }) {
   const [schemas, setSchemas] = React.useState<CommandSchema[]>([]);
   const [commercial, setCommercial] = React.useState<CommercialSnapshot>(OFFLINE_SNAPSHOT);
   const [logs, setLogs] = React.useState<LogLine[]>([]);
+  const { t } = useI18n();
   const [busy, setBusy] = React.useState<string | null>(null);
   const [progress, setProgress] = React.useState<number | null>(null);
   const cancelRef = React.useRef<(() => Promise<void>) | null>(null);
@@ -87,27 +89,27 @@ export function RunnerProvider({ children }: { children: React.ReactNode }) {
         push(
           "info",
           b.backend === "cli"
-            ? `后端就绪 · kuake CLI @ ${b.kuake}`
-            : "后端就绪 · 内置原生夸克 API",
+            ? t("store.readyCli", { kuake: b.kuake })
+            : t("store.readyNative"),
         );
       } catch (e) {
         if (!alive) return;
         const msg = e instanceof Error ? e.message : String(e);
         setBootError(msg);
-        push("err", `启动握手失败: ${msg}`);
+        push("err", t("store.handshakeFail", { msg }));
       }
     })();
     return () => {
       alive = false;
     };
-  }, [push]);
+  }, [push, t]);
 
   const run = React.useCallback(
     async <T,>(cmd: string, args: Record<string, unknown>, label?: string): Promise<T> => {
       const title = label ?? cmd;
       setBusy(title);
       setProgress(null);
-      push("info", `▶ ${title}`);
+      push("info", t("store.start", { title }));
       try {
         const sid = await startRun(cmd, args);
         const handle = subscribe(sid);
@@ -127,7 +129,7 @@ export function RunnerProvider({ children }: { children: React.ReactNode }) {
             {
               // 二维码 SVG / token 等大值只记 key，绝不灌进控制台日志
               if (e.key.startsWith("qr_")) {
-                push("info", `${e.key} 已更新`);
+                push("info", t("store.qrUpdated", { key: e.key }));
               } else {
                 const text = JSON.stringify(e.value);
                 const shown = text.length > 200 ? `${text.slice(0, 200)}…` : text;
@@ -144,15 +146,15 @@ export function RunnerProvider({ children }: { children: React.ReactNode }) {
         const env = final as unknown as { success?: boolean; message?: string; code?: string; data?: T } | null;
 
         if (failure && !env) throw new Error(failure);
-        if (!env) throw new Error("会话中断：没有收到结果（后端可能已退出）");
+        if (!env) throw new Error(t("store.noResult"));
         if (!env.success) {
-          throw new Error(env.message || env.code || "操作失败");
+          throw new Error(env.message || env.code || t("store.opFailed"));
         }
-        push("ok", `✔ ${title} 完成`);
+        push("ok", t("store.done", { title }));
         return env.data as T;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        push("err", `✘ ${title}: ${msg}`);
+        push("err", t("store.fail", { title, msg }));
         throw e;
       } finally {
         cancelRef.current = null;
@@ -160,16 +162,16 @@ export function RunnerProvider({ children }: { children: React.ReactNode }) {
         setProgress(null);
       }
     },
-    [push],
+    [push, t],
   );
 
   const cancel = React.useCallback(async () => {
     if (cancelRef.current) {
       await cancelRef.current();
-      push("err", "已请求取消");
-      toast.message("已请求取消");
+      push("err", t("store.cancelled"));
+      toast.message(t("store.cancelled"));
     }
-  }, [push]);
+  }, [push, t]);
 
   const value: RunnerCtx = {
     booted,

@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRunner } from "@/lib/store";
+import { useI18n } from "@/lib/i18n";
 import { formatBytes, parentPath, relativeTime } from "@/lib/format";
 import type { SearchData, SearchHit } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -103,6 +104,7 @@ function HighlightedName({ raw, name }: { raw?: string; name: string }) {
 
 export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void }) {
   const { run, booted } = useRunner();
+  const { t, lang } = useI18n();
   const [q, setQ] = React.useState("");
   const [term, setTerm] = React.useState("");
   const [nonce, setNonce] = React.useState(0);
@@ -132,7 +134,7 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
     let alive = true;
     setLoading(true);
     setError(null);
-    run<SearchData>("search", { q: term, page: 1, size: PAGE_SIZE }, "搜索 " + term)
+    run<SearchData>("search", { q: term, page: 1, size: PAGE_SIZE }, t("op.search"))
       .then((d) => {
         if (!alive) return;
         setHits(d?.list ?? []);
@@ -170,7 +172,7 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
       const d = await run<SearchData>(
         "search",
         { q: term, page: next, size: PAGE_SIZE },
-        "搜索 " + term + " · 第 " + next + " 页",
+        t("search.page", { n: next }),
       );
       setHits((prev) => [...prev, ...(d?.list ?? [])]);
       setPage(next);
@@ -187,10 +189,10 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
     try {
       await navigator.clipboard.writeText(h.path);
       setCopied(h.fid);
-      toast.success("完整路径已复制");
+      toast.success(t("search.copied"));
       window.setTimeout(() => setCopied(null), 1600);
     } catch {
-      toast.error("剪贴板不可用，请手动复制");
+      toast.error(t("common.clipboardFail"));
     }
   };
 
@@ -211,16 +213,16 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
               autoFocus
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="按文件名搜索整个网盘…"
+              placeholder={t("search.placeholder")}
               className="pl-8 pr-8"
-              aria-label="搜索关键词"
+              aria-label={t("search.ariaLabel")}
             />
             {q ? (
               <button
                 type="button"
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 onClick={() => setQ("")}
-                title="清空"
+                title={t("search.clear")}
               >
                 <X className="size-3.5" />
               </button>
@@ -228,7 +230,7 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
           </div>
           <Button type="submit" size="sm" className="gap-1.5" disabled={!q.trim() || loading}>
             {loading ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-            搜索
+            {t("search.button")}
           </Button>
           <Button
             type="button"
@@ -236,13 +238,13 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
             size="icon-sm"
             disabled={!term || loading}
             onClick={() => setNonce((n) => n + 1)}
-            title="重新搜索"
+            title={t("search.research")}
           >
             <RefreshCw className={cn("size-4", loading && "animate-spin")} />
           </Button>
         </form>
         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-          <span>试试</span>
+          <span>{t("search.try")}</span>
           {["README", ".md", "2026"].map((s) => (
             <button
               key={s}
@@ -253,7 +255,7 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
               {s}
             </button>
           ))}
-          <span className="ml-auto">按 Enter 立即搜索 · 命中处高亮 · 结果给出完整路径</span>
+          <span className="ml-auto">{t("search.tips")}</span>
         </div>
       </div>
 
@@ -261,14 +263,12 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
         {!term ? (
           <div className="grid place-items-center gap-2 py-24 text-center">
             <FileSearch className="size-8 text-muted-foreground/50" />
-            <span className="text-sm text-muted-foreground">输入关键词，跨整个网盘找文件</span>
-            <span className="text-xs text-muted-foreground">
-              空关键词会被挡掉（夸克会把它当成「最近文件」返回）
-            </span>
+            <span className="text-sm text-muted-foreground">{t("search.emptyTitle")}</span>
+            <span className="text-xs text-muted-foreground">{t("search.emptyHint")}</span>
           </div>
         ) : error ? (
           <div className="m-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
-            <p className="text-sm font-medium text-destructive">搜索失败</p>
+            <p className="text-sm font-medium text-destructive">{t("search.failed")}</p>
             <p className="mt-1 break-all text-xs text-muted-foreground">{error}</p>
             <Button
               variant="outline"
@@ -276,7 +276,7 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
               className="mt-3"
               onClick={() => setNonce((n) => n + 1)}
             >
-              重试
+              {t("common.retry")}
             </Button>
           </div>
         ) : loading ? (
@@ -288,18 +288,18 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
         ) : hits.length === 0 ? (
           <div className="grid place-items-center gap-2 py-24 text-center">
             <Search className="size-8 text-muted-foreground/50" />
-            <span className="text-sm text-muted-foreground">没有匹配「{term}」的文件</span>
-            <span className="text-xs text-muted-foreground">换个关键词，或检查一下拼写</span>
+            <span className="text-sm text-muted-foreground">{t("search.noMatch", { term })}</span>
+            <span className="text-xs text-muted-foreground">{t("search.noMatchHint")}</span>
           </div>
         ) : (
           <div>
             <div className="flex items-center gap-2 border-b px-4 py-2 text-[11.5px] text-muted-foreground">
               <span>
-                已加载 <span className="font-medium text-foreground">{hits.length}</span> 条
+                {t("search.loadedPre")} <span className="font-medium text-foreground">{hits.length}</span> {t("search.loadedPost")}
               </span>
               <span>·</span>
-              <span className="truncate">关键词「{term}」</span>
-              <span className="ml-auto">第 {page} 页</span>
+              <span className="truncate">{t("search.keyword", { term })}</span>
+              <span className="ml-auto">{t("search.page", { n: page })}</span>
             </div>
             <ul className="divide-y">
               {hits.map((h, i) => (
@@ -310,21 +310,21 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
                       <div className="flex items-center gap-2">
                         <HighlightedName raw={h.hl_file_name} name={h.file_name} />
                         {h.dir ? (
-                          <Badge variant="muted">目录</Badge>
+                          <Badge variant="muted">{t("search.dir")}</Badge>
                         ) : null}
                         {h.path_partial ? (
-                          <Badge variant="outline">路径不可用</Badge>
+                          <Badge variant="outline">{t("search.pathUnavailable")}</Badge>
                         ) : null}
                       </div>
                       <div
                         className="mt-1 truncate font-mono text-[11px] text-muted-foreground"
                         title={h.path || undefined}
                       >
-                        {h.path || "祖先链反查失败，已禁用复制路径 / 跳转，避免半截路径触发写操作"}
+                        {h.path || t("search.noPath")}
                       </div>
                       <div className="mt-1 flex items-center gap-3 text-[11px] text-muted-foreground">
                         <span>{h.dir ? "—" : formatBytes(h.size)}</span>
-                        <span>{relativeTime(h.mtime || h.updated_at)}</span>
+                        <span>{relativeTime(h.mtime || h.updated_at, lang)}</span>
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
@@ -333,7 +333,7 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
                         size="icon-sm"
                         disabled={!usable(h)}
                         onClick={() => void copyPath(h)}
-                        title={usable(h) ? "复制完整路径" : "路径不可用"}
+                        title={usable(h) ? t("search.copyFullPath") : t("search.pathUnavailable")}
                       >
                         {copied === h.fid ? (
                           <Check className="size-4 text-success" />
@@ -346,7 +346,7 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
                         size="icon-sm"
                         disabled={!usable(h)}
                         onClick={() => jump(h)}
-                        title={usable(h) ? "跳到所在目录" : "路径不可用"}
+                        title={usable(h) ? t("search.jumpDir") : t("search.pathUnavailable")}
                       >
                         <CornerDownRight className="size-4" />
                       </Button>
@@ -365,11 +365,11 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
                   onClick={() => void loadMore()}
                 >
                   {loadingMore ? <Loader2 className="size-4 animate-spin" /> : null}
-                  加载更多（第 {page + 1} 页）
+                  {t("search.loadMore", { n: page + 1 })}
                 </Button>
               ) : (
                 <span className="text-[11px] text-muted-foreground">
-                  已到最后一页 · 接口不返回总数，短页即止
+                  {t("search.lastPage")}
                 </span>
               )}
             </div>
