@@ -165,7 +165,7 @@ fn run_search(app: &Search, ctx: &Context) -> Result<serde_json::Value, AppError
 pub struct Download {
     #[arg(about = "网盘文件路径")]
     pub path: String,
-    #[arg(about = "本机目标目录（不存在会自动创建，支持 ~）；留空则用 kuake 默认下载位置")]
+    #[arg(about = "本机目标目录（不存在会自动创建，支持 ~）；留空则下载到 ~/Downloads")]
     pub dest: Option<String>,
 }
 
@@ -173,18 +173,38 @@ fn run_download(app: &Download, ctx: &Context) -> Result<serde_json::Value, AppE
     let t = start();
     let mut argv = base("download");
     argv.push(app.path.clone());
-    if let Some(d) = app
-        .dest
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        // kuake 对「不存在的 dest」会当成文件名直接写出去（于是得到一个叫 dl 的文件而不是 dl/ 目录）。
-        // 本命令把 dest 声明为「目录」，就自己先把它建出来，语义才不会漂。
-        argv.push(prepare_dest_dir(d)?.to_string_lossy().to_string());
-    }
-    let v = kuake::run(ctx, &argv)?;
+    // dest 留空 = 下载到 ~/Downloads。绝不能把空串交给底层：
+    // 原生后端的「空 dest」语义是「只返回直链、不落盘」，用户会找不到文件。
+    let dest = download_dest(app.dest.as_ref());
+    // kuake 对「不存在的 dest」会当成文件名直接写出去（于是得到一个叫 dl 的文件而不是 dl/ 目录）。
+    // 本命令把 dest 声明为「目录」，就自己先把它建出来，语义才不会漂。
+    argv.push(prepare_dest_dir(&dest)?.to_string_lossy().to_string());
+    let v = kuake::run(ctx, &argv).map_err(download_error_hint)?;
     finish(ctx, t, v)
+}
+
+/// 夸克服务端的下载限制错误，翻译成用户能照做的提示。
+/// 23018 = 文件大小超出当前账号允许的下载上限（免费/普通会员常见）。
+fn download_error_hint(e: AppError) -> AppError {
+    let msg = e.to_string();
+    if msg.contains("download file size limit") || msg.contains("23018") {
+        return AppError::Runtime(
+            "下载失败：夸克服务端拒绝（错误码 23018 · 文件大小超出当前账号的下载上限）。\
+             这是夸克账号侧的限制，不是客户端问题：可到夸克 App 开通/升级会员后重试，\
+             或先下载同目录里较小的文件。"
+                .to_string(),
+        );
+    }
+    e
+}
+
+/// 下载目标目录：留空（或只有空白）→ `~/Downloads`。
+/// 不能把空串交给底层：原生后端把「空 dest」解释成「只返回直链、不落盘」。
+fn download_dest(dest: Option<&String>) -> String {
+    dest.map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "~/Downloads".to_string())
 }
 
 /// 把用户填的下载目录规整成一个**确实存在**的目录。
@@ -1247,7 +1267,33 @@ mod tests {
 
 #[cfg(test)]
 mod dest_tests {
-    use super::prepare_dest_dir;
+    use super::{download_dest, download_error_hint, prepare_dest_dir};
+    use lilyco::__core::AppError;
+
+    #[test]
+    fn blank_dest_defaults_to_downloads() {
+        assert_eq!(download_dest(None), "~/Downloads");
+        assert_eq!(download_dest(Some(&"".to_string())), "~/Downloads");
+        assert_eq!(download_dest(Some(&"   ".to_string())), "~/Downloads");
+        assert_eq!(download_dest(Some(&"~/Pictures".to_string())), "~/Pictures");
+        assert_eq!(download_dest(Some(&"/tmp/dl".to_string())), "/tmp/dl");
+    }
+
+    #[test]
+    fn quota_error_becomes_actionable() {
+        let raw = "/1/clouddrive/file/download 失败：download file size limit[65bd] [23018]";
+        let e = download_error_hint(AppError::Runtime(raw.to_string()));
+        let msg = format!("{e}");
+        assert!(msg.contains("23018"), "{msg}");
+        assert!(msg.contains("会员"), "{msg}");
+        assert!(!msg.contains("download file size limit"), "{msg}");
+    }
+
+    #[test]
+    fn other_download_errors_pass_through() {
+        let e = download_error_hint(AppError::Runtime("network boom".to_string()));
+        assert!(format!("{e}").contains("network boom"));
+    }
 
     #[test]
     fn creates_missing_directory() {

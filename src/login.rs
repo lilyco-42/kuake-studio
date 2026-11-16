@@ -121,7 +121,7 @@ fn account_nickname(v: &Value) -> Result<String, AppError> {
 }
 
 /// 只替换 KUAKE_COOKIE 一行，其余行原样保留；无该行则追加。
-fn write_env(path: &Path, cookie: &str) -> Result<(), AppError> {
+pub(crate) fn write_env(path: &Path, cookie: &str) -> Result<(), AppError> {
     if cookie
         .chars()
         .any(|c| matches!(c, '\'' | '"' | '\n' | '\r' | '\\' | '\u{60}'))

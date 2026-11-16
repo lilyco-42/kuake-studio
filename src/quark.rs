@@ -28,6 +28,12 @@ const UA_PC: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.3
 const UA_DL: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 const UA_OSS: &str = "aliyun-sdk-js/1.0.0 Chrome 145.0.0.0 on Windows 10 64-bit";
 const PART_SIZE: usize = 4 * 1024 * 1024;
+/// 下载直链是临时签名：签名链接偶发 412/403，重新申请一条再试通常即成功。
+/// 412 的冷却窗口在 10 秒量级（退避 1.5s → 3s → 6s）；403 auth expired 实测
+/// 可能是短时间重复下载触发，冷却更久（退避 3s → 6s → 12s），共 4 次尝试。
+const DOWNLOAD_RETRIES: u32 = 4;
+const DOWNLOAD_RETRY_BASE_MS: u64 = 1500;
+const DOWNLOAD_AUTH_RETRY_BASE_MS: u64 = 3000;
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -82,6 +88,52 @@ fn cookie() -> Result<String, AppError> {
     ))
 }
 
+/// 解析单条 Set-Cookie 的「name=value」（忽略 Path/Expires/Max-Age 等属性）。
+fn parse_set_cookie(line: &str) -> Option<(String, String)> {
+    let pair = line.split(';').next()?.trim();
+    let (name, value) = pair.split_once('=')?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), value.trim().to_string()))
+}
+
+/// 把 Set-Cookie 的更新合并进现有 cookie 串：同名覆盖、新名追加、空值删除。
+fn merge_cookie(base: &str, updates: &[(String, String)]) -> String {
+    let mut parts: Vec<(String, String)> = base
+        .split(';')
+        .filter_map(|p| p.trim().split_once('='))
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .filter(|(k, _)| !k.is_empty())
+        .collect();
+    for (name, value) in updates {
+        if value.is_empty() {
+            parts.retain(|(k, _)| k != name);
+        } else if let Some(slot) = parts.iter_mut().find(|(k, _)| k == name) {
+            slot.1 = value.clone();
+        } else {
+            parts.push((name.clone(), value.clone()));
+        }
+    }
+    parts
+        .into_iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// 把最新 cookie 写回 ~/.config/kuake/.env（失败不影响本次请求）。
+fn persist_cookie_env(cookie: &str) {
+    let Some(home) = crate::paths::home_dir() else {
+        return;
+    };
+    let path = home.join(".config/kuake/.env");
+    if path.exists() {
+        let _ = crate::login::write_env(&path, cookie);
+    }
+}
+
 fn ok(message: &str, data: Value) -> Value {
     json!({ "success": true, "code": "OK", "message": message, "data": data })
 }
@@ -102,16 +154,46 @@ fn clip_utf8(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
+/// 下载直链是夸克临时签名的：偶发 412（CDN 前置条件未命中）、403（登录态被拒/风控）、
+/// 429/5xx 都很常见，隔一会儿重新申请一条直链再试通常就能成功。
+fn retryable_download_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 403 | 408 | 412 | 425 | 429) || status.is_server_error()
+}
+
+/// 响应体是否属于「登录态被拒」：夸克对短时间重复下载也用 auth expired 这个口径。
+fn download_auth_expired(body: &str) -> bool {
+    body.contains("auth expired")
+        || body.contains("RequestDeniedByCallback")
+        || body.contains("require login")
+}
+
+/// 下一次重试前该等多久（毫秒）；None 表示不再重试。
+/// 412/429/5xx 走指数退避覆盖 CDN 冷却窗口；403 只在 auth expired 时走更长的退避，
+/// 其它 403（防盗链等）快速失败。
+fn download_retry_delay_ms(attempt: u32, status: reqwest::StatusCode, body: &str) -> Option<u64> {
+    if attempt >= DOWNLOAD_RETRIES {
+        return None;
+    }
+    if status == reqwest::StatusCode::FORBIDDEN {
+        return download_auth_expired(body)
+            .then(|| DOWNLOAD_AUTH_RETRY_BASE_MS << attempt.saturating_sub(1));
+    }
+    retryable_download_status(status).then(|| DOWNLOAD_RETRY_BASE_MS << attempt.saturating_sub(1))
+}
+
 /// OSS 下载链路的 403 是 callback 校验登录态；cookie 过期时回的是一大坨 XML。
 /// 折叠成用户能照做的提示——账号页扫码登录会 set_var 热更新凭据，无需重启即可重试。
 fn download_http_error(status: reqwest::StatusCode, body: &str) -> AppError {
-    let auth_expired = body.contains("auth expired")
-        || body.contains("RequestDeniedByCallback")
-        || body.contains("require login");
-    if auth_expired {
+    if download_auth_expired(body) {
         return err(format!(
-            "下载失败：夸克登录态已过期（HTTP {status}）。请在「账号」页重新扫码登录，成功后无需重启即可重试下载。"
+            "下载失败：夸克拒绝了这个下载请求（HTTP {status}）。夸克对短时间重复下载也会报登录态过期，客户端已自动重试仍失败。请稍等 30 秒再试；若一直失败，请在「账号」页重新扫码登录（无需重启）。"
         ));
+    }
+    if status == reqwest::StatusCode::PRECONDITION_FAILED {
+        return err(
+            "下载失败：夸克下载链路暂时拒绝了该请求（HTTP 412 Precondition Failed），自动重试后仍未成功。请稍后再试；若反复出现，请在「账号」页重新扫码登录后重试下载。"
+                .to_string(),
+        );
     }
     err(format!(
         "download failed: status {status}, body: {}",
@@ -303,7 +385,9 @@ fn path_join(base: &str, name: &str) -> String {
 struct Api {
     http: Client,
     long: Client,
-    cookie: String,
+    /// 夸克会通过 `Set-Cookie` 轮换 `__puus`（下载 CDN 的 callback 校验需要它），
+    /// 所以 cookie 必须是运行期可更新的。
+    cookie: std::sync::Mutex<String>,
 }
 
 impl Api {
@@ -319,7 +403,11 @@ impl Api {
             .user_agent(UA_DL)
             .build()
             .map_err(|e| err(format!("构建 HTTP 客户端失败：{e}")))?;
-        Ok(Api { http, long, cookie })
+        Ok(Api {
+            http,
+            long,
+            cookie: std::sync::Mutex::new(cookie),
+        })
     }
 
     fn url(base: &str, ep: &str, extra: &[(&str, String)]) -> Result<Url, AppError> {
@@ -352,7 +440,7 @@ impl Api {
                     .map_err(|_| err("HTTP 方法无效"))?,
                 url,
             )
-            .header("Cookie", &self.cookie)
+            .header("Cookie", self.cookie_value())
             .header("Accept", "application/json, text/plain, */*")
             .header("Accept-Language", "zh-CN,zh;q=0.9")
             .header("Cache-Control", "no-cache")
@@ -365,7 +453,49 @@ impl Api {
                 .header("Content-Type", "application/json")
                 .body(serde_json::to_vec(b)?);
         }
-        req.send().map_err(|e| err(format!("网络请求失败：{e}")))
+        let resp = req.send().map_err(|e| err(format!("网络请求失败：{e}")))?;
+        // 夸克在 /file/sort、/config 等响应里轮换 __puus；不吸收就会让直链下载
+        // 的 CDN callback 报 `require login [auth miss]`（403）。
+        self.absorb_set_cookie(resp.headers());
+        Ok(resp)
+    }
+
+    fn cookie_value(&self) -> String {
+        self.cookie.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    fn absorb_set_cookie(&self, headers: &reqwest::header::HeaderMap) {
+        let mut updates = Vec::new();
+        for raw in headers.get_all(reqwest::header::SET_COOKIE) {
+            let Ok(line) = raw.to_str() else { continue };
+            if let Some(pair) = parse_set_cookie(line) {
+                updates.push(pair);
+            }
+        }
+        if updates.is_empty() {
+            return;
+        }
+        let Ok(mut guard) = self.cookie.lock() else {
+            return;
+        };
+        let known: Vec<String> = guard
+            .split(';')
+            .filter_map(|p| p.trim().split_once('='))
+            .map(|(k, _)| k.trim().to_string())
+            .collect();
+        let added = updates
+            .iter()
+            .any(|(k, v)| !v.is_empty() && !known.iter().any(|x| x == k));
+        let merged = merge_cookie(&guard, &updates);
+        if merged == *guard {
+            return;
+        }
+        *guard = merged.clone();
+        std::env::set_var("KUAKE_COOKIE", &merged);
+        // 只有出现新字段（典型是首次拿到 __puus）才写盘，避免每次 API 响应都刷 .env。
+        if added {
+            persist_cookie_env(&merged);
+        }
     }
 
     /// 普通 API：返回整个响应 JSON（已检查业务码）。
@@ -1493,20 +1623,9 @@ fn hex(bytes: &[u8]) -> String {
     s
 }
 
-fn cmd_download(ctx: &Context, api: &Api, argv: &[String]) -> Result<Value, AppError> {
-    let path = need(argv, 1, "path")?;
-    let dest = opt(argv, 2);
-    let e = api.resolve(path)?;
-    if e.dir {
-        return Err(AppError::InvalidInput(
-            "不能下载目录，请选择单个文件".into(),
-        ));
-    }
-    let v = api.post(
-        "/1/clouddrive/file/download",
-        &[],
-        json!({ "fids": [e.fid] }),
-    )?;
+/// 向夸克申请一条下载直链（异步任务场景会轮询到 task 完成）。
+fn download_url_of(api: &Api, fid: &str) -> Result<String, AppError> {
+    let v = api.post("/1/clouddrive/file/download", &[], json!({ "fids": [fid] }))?;
     let d = data_of(&v)?;
     let mut url = deep_get(&d, "download_url").map(as_str).unwrap_or_default();
     if url.is_empty() {
@@ -1523,22 +1642,15 @@ fn cmd_download(ctx: &Context, api: &Api, argv: &[String]) -> Result<Value, AppE
     if url.is_empty() {
         return Err(err("夸克没有返回下载地址（可能文件违规或登录态过期）"));
     }
-    if dest.is_empty() {
-        return Ok(ok(
-            "Download URL retrieved successfully",
-            json!({ "fid": e.fid, "path": e.path, "download_url": url }),
-        ));
-    }
-    let dir = Path::new(dest);
-    if !dir.is_dir() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let local = unique_path(dir, &e.name);
-    let u = Url::parse(&url).map_err(|e| err(format!("下载地址无效：{e}")))?;
-    let mut resp = api
-        .long
+    Ok(url)
+}
+
+/// 直链落盘用独立请求头（浏览器形态），和 API 信封请求分开维护。
+fn open_download(api: &Api, url: &str) -> Result<Response, AppError> {
+    let u = Url::parse(url).map_err(|e| err(format!("下载地址无效：{e}")))?;
+    api.long
         .get(u)
-        .header("Cookie", &api.cookie)
+        .header("Cookie", api.cookie_value())
         .header("Accept", "*/*")
         .header("Accept-Language", "zh-CN,zh;q=0.9")
         .header("Cache-Control", "no-cache")
@@ -1550,17 +1662,90 @@ fn cmd_download(ctx: &Context, api: &Api, argv: &[String]) -> Result<Value, AppE
         .header("Sec-Fetch-Site", "same-site")
         .header("Upgrade-Insecure-Requests", "1")
         .send()
-        .map_err(|e| err(format!("下载请求失败：{e}")))?;
-    if !resp.status().is_success() {
-        let st = resp.status();
+        .map_err(|e| err(format!("下载请求失败：{e}")))
+}
+
+/// 直链下载失败时自动重试：每次重试都重新申请一条直链（reissue），
+/// 退避策略见 `download_retry_delay_ms`。拆成可注入形式便于本地 HTTP 测试。
+fn open_download_with_retry(
+    ctx: &Context,
+    first_url: &str,
+    mut reissue: impl FnMut() -> Result<String, AppError>,
+    mut open: impl FnMut(&str) -> Result<Response, AppError>,
+) -> Result<Response, AppError> {
+    let mut attempt = 1u32;
+    let mut url = first_url.to_string();
+    loop {
+        let mut r = open(&url)?;
+        if r.status().is_success() {
+            return Ok(r);
+        }
+        let st = r.status();
         let mut body = String::new();
-        let _ = resp.read_to_string(&mut body);
+        let _ = r.read_to_string(&mut body);
+        if let Some(delay_ms) = download_retry_delay_ms(attempt, st, &body) {
+            ctx.log(
+                LogLevel::Warn,
+                format!(
+                    "下载直链返回 HTTP {st}（{attempt}/{total}），重新申请直链后重试…",
+                    total = DOWNLOAD_RETRIES
+                ),
+            );
+            if ctx.is_cancelled() {
+                return Err(AppError::Cancelled);
+            }
+            std::thread::sleep(Duration::from_millis(delay_ms));
+            attempt += 1;
+            // 签名链接短时内复用，大概率继续 412/403，必须重新申请。
+            url = reissue()?;
+            continue;
+        }
         return Err(download_http_error(st, &body));
     }
+}
+
+fn cmd_download(ctx: &Context, api: &Api, argv: &[String]) -> Result<Value, AppError> {
+    let path = need(argv, 1, "path")?;
+    let dest = opt(argv, 2);
+    let e = api.resolve(path)?;
+    if e.dir {
+        return Err(AppError::InvalidInput(
+            "不能下载目录，请选择单个文件".into(),
+        ));
+    }
+    let first_url = download_url_of(api, &e.fid)?;
+    if dest.is_empty() {
+        return Ok(ok(
+            "Download URL retrieved successfully",
+            json!({ "fid": e.fid, "path": e.path, "download_url": first_url }),
+        ));
+    }
+    let dir = Path::new(dest);
+    if !dir.is_dir() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let local = unique_path(dir, &e.name);
+    ctx.log(
+        LogLevel::Info,
+        format!(
+            "开始下载：{} → {}（{}）",
+            e.path,
+            local.display(),
+            human_bytes(e.size.max(0) as u64)
+        ),
+    );
+    let mut resp = open_download_with_retry(
+        ctx,
+        &first_url,
+        || download_url_of(api, &e.fid),
+        |url| open_download(api, url),
+    )?;
     let mut f = std::fs::File::create(&local)?;
-    let mut buf = [0u8; 64 * 1024];
+    let mut buf = [0u8; 256 * 1024];
     let mut total = 0u64;
-    let mut next_tick = 1024u64 * 1024;
+    let size_bytes = e.size.max(0) as u64;
+    let started = std::time::Instant::now();
+    let mut next_tick = 256u64 * 1024;
     loop {
         if ctx.is_cancelled() {
             return Err(AppError::Cancelled);
@@ -1572,12 +1757,19 @@ fn cmd_download(ctx: &Context, api: &Api, argv: &[String]) -> Result<Value, AppE
         f.write_all(&buf[..n])?;
         total += n as u64;
         if total >= next_tick {
+            let secs = started.elapsed().as_secs_f64().max(0.05);
+            let speed = (total as f64 / secs) as u64;
             ctx.tick(
                 total,
-                Some(e.size.max(0) as u64),
-                format!("下载中 · {} ", human_bytes(total)),
+                Some(size_bytes),
+                format!(
+                    "下载中 · {} / {} · {}/s",
+                    human_bytes(total),
+                    human_bytes(size_bytes),
+                    human_bytes(speed)
+                ),
             );
-            next_tick += 1024 * 1024;
+            next_tick += 256 * 1024;
         }
     }
     f.flush()?;
@@ -2259,7 +2451,8 @@ mod tests {
 <Message>Callback deny this request reason: require login [auth expired]</Message></Error>";
         let e = download_http_error(reqwest::StatusCode::FORBIDDEN, xml);
         let msg = format!("{e}");
-        assert!(msg.contains("登录态已过期"), "{msg}");
+        assert!(msg.contains("短时间重复下载"), "{msg}");
+        assert!(msg.contains("稍等 30 秒"), "{msg}");
         assert!(msg.contains("重新扫码登录"), "{msg}");
         assert!(
             !msg.contains("RequestDeniedByCallback"),
@@ -2276,6 +2469,58 @@ mod tests {
     }
 
     #[test]
+    fn download_error_precondition_is_actionable() {
+        let html = "<html><head><title>412 Precondition Failed</title></head></html>";
+        let e = download_http_error(reqwest::StatusCode::PRECONDITION_FAILED, html);
+        let msg = format!("{e}");
+        assert!(msg.contains("412"), "{msg}");
+        assert!(msg.contains("自动重试"), "{msg}");
+        assert!(msg.contains("稍后再试"), "{msg}");
+        assert!(
+            !msg.contains("<!DOCTYPE"),
+            "不该把 CDN HTML 抛给用户: {msg}"
+        );
+    }
+
+    #[test]
+    fn retryable_download_status_covers_transient_but_not_client_errors() {
+        for code in [403, 408, 412, 425, 429, 500, 502, 503, 504] {
+            assert!(
+                retryable_download_status(reqwest::StatusCode::from_u16(code).unwrap()),
+                "{code} 应该重试"
+            );
+        }
+        for code in [400, 401, 404, 410] {
+            assert!(
+                !retryable_download_status(reqwest::StatusCode::from_u16(code).unwrap()),
+                "{code} 不该重试"
+            );
+        }
+    }
+
+    #[test]
+    fn set_cookie_parse_ignores_attributes() {
+        assert_eq!(
+            parse_set_cookie("__puus=abc123; Path=/; Max-Age=604800; HttpOnly"),
+            Some(("__puus".to_string(), "abc123".to_string()))
+        );
+        assert_eq!(parse_set_cookie("garbage"), None);
+    }
+
+    #[test]
+    fn merge_cookie_replaces_and_appends() {
+        let updates = vec![
+            ("ctoken".to_string(), "9".to_string()),
+            ("__puus".to_string(), "x".to_string()),
+        ];
+        assert_eq!(
+            merge_cookie("__pus=1; ctoken=2", &updates),
+            "__pus=1; ctoken=9; __puus=x"
+        );
+        assert_eq!(merge_cookie("", &updates), "ctoken=9; __puus=x");
+    }
+
+    #[test]
     fn clip_utf8_never_splits_multibyte() {
         let s = "错误".repeat(300); // 每字 3 字节，共 900 字节
         let clipped = clip_utf8(&s, 400);
@@ -2283,5 +2528,100 @@ mod tests {
         assert!(std::str::from_utf8(clipped.as_bytes()).is_ok());
         assert!(clipped.chars().all(|c| c == '错' || c == '误'));
         assert_eq!(clip_utf8("short", 400), "short");
+    }
+
+    #[test]
+    fn download_retry_delay_backs_off_then_gives_up() {
+        let p = reqwest::StatusCode::PRECONDITION_FAILED;
+        // 412 的 CDN 冷却窗口在 10 秒量级：1.5s → 3s → 6s，第 4 次不再重试
+        assert_eq!(download_retry_delay_ms(1, p, ""), Some(1500));
+        assert_eq!(download_retry_delay_ms(2, p, ""), Some(3000));
+        assert_eq!(download_retry_delay_ms(3, p, ""), Some(6000));
+        assert_eq!(download_retry_delay_ms(4, p, ""), None);
+
+        // 403 auth expired：夸克对短时间重复下载也会这么报，冷却更久（3s → 6s → 12s）
+        let forbidden = reqwest::StatusCode::FORBIDDEN;
+        let auth = "<Error><Message>require login [auth expired]</Message></Error>";
+        assert_eq!(download_retry_delay_ms(1, forbidden, auth), Some(3000));
+        assert_eq!(download_retry_delay_ms(2, forbidden, auth), Some(6000));
+        assert_eq!(download_retry_delay_ms(3, forbidden, auth), Some(12000));
+        assert_eq!(download_retry_delay_ms(4, forbidden, auth), None);
+
+        // 其它 403（防盗链等）不该白等
+        assert_eq!(download_retry_delay_ms(1, forbidden, "Forbidden"), None);
+
+        // 客户端错误（文件不存在等）不该浪费退避时间
+        assert_eq!(
+            download_retry_delay_ms(1, reqwest::StatusCode::NOT_FOUND, ""),
+            None
+        );
+    }
+
+    #[test]
+    fn download_retry_reissues_url_after_412_and_streams_ok() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        // 本地 CDN 替身：第一次 412（与真实日志同形），第二次 200。
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_srv = Arc::clone(&hits);
+        let server = std::thread::spawn(move || {
+            for accepted in listener.incoming().take(2) {
+                let Ok(mut stream) = accepted else { continue };
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let n = hits_srv.fetch_add(1, Ordering::SeqCst);
+                let (code, body) = if n == 0 {
+                    ("412 Precondition Failed", "<html>412</html>")
+                } else {
+                    ("200 OK", "ok")
+                };
+                let resp = format!(
+                    "HTTP/1.1 {code}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let reissues = Arc::new(AtomicUsize::new(0));
+        let reissues_cli = Arc::clone(&reissues);
+        let second = format!("http://{addr}/second");
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let ctx = Context::from_sender(tx);
+
+        let mut resp = open_download_with_retry(
+            &ctx,
+            &format!("http://{addr}/first"),
+            move || {
+                reissues_cli.fetch_add(1, Ordering::SeqCst);
+                Ok(second.clone())
+            },
+            |url| {
+                client
+                    .get(url)
+                    .send()
+                    .map_err(|e| err(format!("下载请求失败：{e}")))
+            },
+        )
+        .unwrap();
+
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        let mut body = String::new();
+        resp.read_to_string(&mut body).unwrap();
+        assert_eq!(body, "ok", "重试成功后应拿到 200 响应体");
+        assert_eq!(reissues.load(Ordering::SeqCst), 1, "412 后应重新申请直链");
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "共两次落盘请求");
+        server.join().unwrap();
+        drop(_rx);
     }
 }

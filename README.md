@@ -173,6 +173,72 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 ./run.sh --cli list --openai-tool               # 顺便白送 OpenAI/Anthropic/Gemini tool 定义
 ```
 
+## 使用手册（v0.5.13）
+
+### 1. 安装与升级
+
+| 平台 | 安装 | 升级 |
+| --- | --- | --- |
+| Linux | 解压发布包 → `./install.sh` → 桌面「夸克网盘」 | 重复执行 `./install.sh`（凭据与已下载文件不动） |
+| Windows | 双击 `*.msi`，或解压 zip 双击 `run.bat` | 覆盖安装 |
+| macOS | 解压后右键 `kuake-studio.app` → 打开 | 替换 `.app` |
+| Android | 安装 `*-android.apk`（允许未知来源） | 覆盖安装 |
+
+升级后先确认界面版本以 **v0.5.13** 开头；如果仍是旧版本号，说明启动的是旧二进制——从托盘退出或结束 `kuake-studio` 进程后再启动一次。
+
+### 2. 扫码登录
+
+「账号」页 → **扫码登录** → 用夸克 App 扫码。成功后凭据自动写入 `~/.config/kuake/.env`，
+**无需重启**即可继续操作。Cookie 真失效时，同一个入口重新扫码即可。
+
+> v0.5.13 起客户端会自动吸收夸克 API 响应里的 `Set-Cookie`（尤其是下载 CDN 需要的
+> `__puus`）并写回 `.env`，所以扫码后第一次列目录/下载就会把凭据补全。
+
+### 3. 下载文件
+
+文件页勾选文件 → **下载到本机**：
+
+- 目标目录**留空就落到 `~/Downloads`**（不存在会自动创建），也支持 `~` 与绝对路径。
+- 同名文件不会覆盖，会变成 `small (1).txt` 这类名字。
+- 活动日志会打印三段可核对的信息：
+  - `开始下载：<网盘路径> → <本机绝对路径>（<大小>）`
+  - `下载中 · 已下载 / 总大小 · 速度`（每 256 KB 刷新一次）
+  - `下载完成：<本机绝对路径>（<字节数>）`
+
+### 4. 下载失败速查
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| `403 auth expired`，且距上次成功很久 | Cookie 失效 | 「账号」页重新扫码 |
+| `403 auth expired`，且距上次成功只有几秒 | 夸克对短时间重复下载的风控 | 客户端自动退避 3s → 6s → 12s 重试；仍失败等 30 秒再点 |
+| `403 auth miss` | Cookie 缺下载 CDN 专用字段 `__puus` | v0.5.13 起自动从 `Set-Cookie` 补全并写回 `.env`，重开一次下载即可 |
+| `412 Precondition Failed`（HTML 正文） | 直链临时被 CDN 拒绝 | 客户端自动重新申请直链，退避 1.5s → 3s → 6s |
+| `23018 download file size limit` | 账号对单文件下载大小有上限 | 开通/升级会员，或先下载较小的文件 |
+| `Unauthorized: bad token` | 后端重启换了 CSRF token，页面还是旧 token | v0.5.13 起前端遇 401 会自动重新握手并重试；旧页面刷新一次即可 |
+| 一直停在「执行中」 | 命令线程异常或终态事件丢失 | v0.5.13 起会补发明确错误；仍复现则看日志文件 |
+
+### 5. 界面缩放
+
+- 侧栏底部 `−  100%  +  ↺`：80%–160% 实时缩放，偏好写进 `localStorage`，重开仍生效。
+- 快捷键：`Ctrl/⌘ +` 放大、`Ctrl/⌘ -` 缩小、`Ctrl/⌘ 0` 重置。
+- 缩放作用于整站字号（Tailwind rem），不用重开窗口。
+
+### 6. 日志与排查
+
+- 界面：底部「活动日志」，可折叠、可清空；错误红色、完成绿色，轮询/重试都有记录。
+- 文件：`~/.local/state/kuake-studio/studio.log`（Linux/macOS），单文件超过 5 MB 自动轮转一份 `.1`。
+- 报告问题时，贴「开始下载 / 重试 / 错误」三行 + 日志文件最后几十行即可定位。
+
+### 7. 同一个二进制：CLI / MCP
+
+```bash
+kuake-studio --cli list --path / --json
+kuake-studio --cli download --path "/03_项目与资料/a.zip" --dest ~/Downloads
+kuake-studio --cli upload --file ~/a.zip --dest /03_项目与资料/a.zip
+kuake-studio --mcp          # 作为 MCP server 暴露给 AI
+kuake-studio --schema       # 打印 25 条命令的 JSON Schema
+```
+
 ## 功能
 
 | 页面 | 能力 |
@@ -182,9 +248,9 @@ KUAKE_STUDIO_BACKEND=cli ./run.sh --cli list --path / --json  # 回退到本机 
 | 分享 | 我的分享列表（有效期/浏览/转存）、复制链接、浏览器打开、取消分享、转存他人分享 |
 | 回收站 | 最近删除列表（删除时间/剩余天数）、勾选后**批量恢复**、**永久删除**、分页加载（v0.5.5） |
 | 账号 | 昵称、会员类型与到期、容量占用进度、网盘后端类型与版本、**扫码登录**（一键刷新凭据） |
-| 活动日志 | 每次调用的实时进度/耗时/错误，可折叠、可清空 |
+| 活动日志 | 实时进度（含**本机路径、字节数、速度**）、耗时、重试轮次与错误；可折叠、可清空（v0.5.13） |
 | 关于 / 赞助 | 联系方式、赞助二维码（同源加载）、名利选其一、许可与商用口径、赞助授权解锁去广告、云端推送开关（v0.5.11） |
-| 全站 | 中文 / English 一键切换，五个业务视图与日志同语言（v0.5.12） |
+| 全站 | 中文 / English 一键切换，五个业务视图与日志同语言（v0.5.12）；**80%–160% 界面缩放 + Ctrl +/-/0 快捷键**（v0.5.13） |
 
 25 个命令：`list` `info` `search` `user` `version` `download` `share-list` `recycle-list` `create` `upload`
 `move` `copy` `rename` `delete` `share` `share-delete` `share-save` `recycle-restore`
@@ -289,6 +355,53 @@ bug**——同一份 cookie 用原版 `kuake` CLI 下载同样 403，带/不带 
 顺手把按字节 400 硬切的 `&body[..400]` 换成 UTF-8 边界安全的 `clip_utf8`，中文错误报文不再
 有切坏字符 panic 的风险。不要跑 `dump-cookies.mjs --write-env` 碰运气：无桌面 keyring 时
 Chrome 的 v10/v11 cookie 解密不出来，会写出空凭据。
+
+## 下载链路修复：__puus / 403 / 412 / 23018（v0.5.13）
+
+夸克 `file/download` 返回的直链是**临时签名**，下载 CDN（Tengine）的 callback 还会校验
+cookie 里的 `__puus`。v0.5.13 前客户端有两个缺陷，实测都会让下载失败：
+
+1. **没有吸收 `Set-Cookie`**：`__puus` 是服务端在 `/file/sort`、`/config` 响应里下发的，
+   客户端只保存扫码拿到的 `ctoken/__pus`，直链请求就报 `403 require login [auth miss]`；
+2. **失败只折叠一行原始报文**：`412 Precondition Failed` 的 HTML 或腾讯云 XML 直接抛给用户，
+   既看不懂也没有下一步。
+
+现在 `Api` 每次响应都会解析 `Set-Cookie`，按「同名覆盖、新名追加」合并进 cookie，首次出现新字段
+（典型就是 `__puus`）时写回 `~/.config/kuake/.env`，直链请求始终带最新凭据。
+
+v0.5.13 起 `download` 直链落盘带自动重试：
+
+- 412 / 408 / 425 / 429 / 5xx：指数退避 **1.5s → 3s → 6s**，最多 4 次尝试，覆盖实测约
+  10 秒的 CDN 冷却窗口；
+- 403（`auth expired`）：按 **3s → 6s → 12s** 退避。实测同一份 cookie 在 10 秒内可以「先下载成功、
+  后一次被 403」，所以这更像夸克对短时间重复下载的风控口径，而不是 cookie 真过期；重试仍失败
+  才提示「稍等 30 秒 / 重新扫码登录」（扫码后 cookie 热更新，无需重启）；
+- 其它 403（防盗链等）：不浪费时间，直接报错；
+- **每次重试都重新申请一条直链**——复用旧签名几乎必然继续 412；
+- 404 / 401 / 410 这类客户端错误不重试，直接报错；
+- 4 次仍 412 时不再抛 CDN HTML，改为「稍后再试；若反复出现请重新扫码登录」。
+
+回归测试用一个本地 HTTP 替身按真实日志复现：第一次 412 → 第二次 200，断言过程中确实调用了
+`reissue` 重新申请直链，并校验最终响应体（`quark::tests::download_retry_reissues_url_after_412_and_streams_ok`）。
+
+**下载落地位置**：`dest` 留空不再等于「只取直链」——`apps.rs::run_download` 会把空 dest 规整成
+`~/Downloads`（不存在则 `mkdir -p`），UI 里直接点「下载」就能在磁盘上找到文件。活动日志会打印：
+
+- `开始下载：<网盘路径> → <本机绝对路径>（<大小>）`
+- 重试时每一轮 `下载直链返回 HTTP 4xx（n/4），重新申请直链后重试…`
+- `下载完成：<本机绝对路径>（<字节数>）`
+
+同目录已有同名文件时落盘名会带 ` (1)` 之类的后缀（`unique_path`），日志里给的是最终真实路径。
+
+**23018 是账号限制**：90 MB 这类大文件被夸克回 `download file size limit … [23018]` 时，
+客户端翻译成「文件大小超出当前账号的下载上限，可开通/升级会员或先下载较小文件」，
+不再展示原始错误码。
+
+**CSRF token 轮换**：桌面版每次启动都会换一个一次性 `X-Kuake-Token`。v0.5.13 起前端写请求遇
+`401 Unauthorized: bad token` 会自动重新 `/api/boot` 握手并重试一次，跨重启不需要手动刷新页面。
+
+**日志落盘**：`open.sh` 把服务 stdout/stderr 写到 `~/.local/state/kuake-studio/studio.log`
+（超过 5 MB 轮转 `.1`）；下载进度每 256 KB 刷新一次并带速度。
 
 ## Android 版本号防漂移（v0.5.8）
 
@@ -576,7 +689,8 @@ cd ~/code/kuake-studio/tools
 3. `share-days` 只有 **0 / 1 / 7 / 30**（夸克服务端限制），已做成下拉框。
 4. `share-list` 的 `size` 上限 **100**；`share-delete` 只认 `share_id`，不认 `pwd_id`。
 5. 不能转存**自己**创建的分享（夸克账号级限制 `41017`），需换另一个账号的链接。
-6. `download` 的 dest 被规整成**目录**（不存在自动建，支持 `~`）；`upload` 的 dest 必须是
+6. `download` 的 dest 被规整成**目录**（不存在自动建，支持 `~`）；**留空则落到 `~/Downloads`**
+   （不再等于「只取直链」）；`upload` 的 dest 必须是
    **完整文件路径**，同名已存在返回 `SKIPPED`，客户端转成明确错误，不会静默覆盖。
 
 ### 回退到 kuake CLI（`KUAKE_STUDIO_BACKEND=cli`）

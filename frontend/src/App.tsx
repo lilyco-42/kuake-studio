@@ -12,6 +12,9 @@ import {
   User,
   Heart,
   Languages,
+  RotateCcw,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 
 import { ConsolePanel } from "@/components/console-panel";
@@ -28,6 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/lib/i18n";
 import { useRunner } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { ZOOM_STEP, applyZoom, clampZoom, readZoom, resetZoom } from "@/lib/zoom";
 
 type Tab = "files" | "search" | "shares" | "recycle" | "account" | "about";
 
@@ -92,6 +96,29 @@ export default function App() {
     root.classList.toggle("dark", theme === "dark");
     root.style.colorScheme = theme;
   }, [theme]);
+
+  // 界面缩放：Ctrl/⌘ + − / 0 与侧栏按钮共用一份状态，写入 localStorage
+  const [zoom, setZoom] = React.useState(() => readZoom());
+  React.useEffect(() => {
+    applyZoom(zoom);
+  }, [zoom]);
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        setZoom((z) => clampZoom(z + ZOOM_STEP));
+      } else if (e.key === "-") {
+        e.preventDefault();
+        setZoom((z) => clampZoom(z - ZOOM_STEP));
+      } else if (e.key === "0") {
+        e.preventDefault();
+        setZoom(resetZoom());
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // 切到分享页时给出提示：分享列表依赖 share-list 命令
   const hasShares = schemas.some((s) => s.name === "share-list");
@@ -182,10 +209,42 @@ export default function App() {
           </nav>
 
           <div className="mt-auto grid gap-1">
+            <div className="hidden items-center justify-between gap-0.5 px-1 md:flex">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="size-7"
+                onClick={() => setZoom((z) => clampZoom(z - ZOOM_STEP))}
+                title={t("zoom.out")}
+              >
+                <ZoomOut className="size-4" />
+              </Button>
+              <span className="min-w-10 text-center text-xs tabular text-muted-foreground">
+                {Math.round(zoom * 100)}%
+              </span>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="size-7"
+                onClick={() => setZoom((z) => clampZoom(z + ZOOM_STEP))}
+                title={t("zoom.in")}
+              >
+                <ZoomIn className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="size-7"
+                onClick={() => setZoom(resetZoom())}
+                title={t("zoom.reset")}
+              >
+                <RotateCcw className="size-3.5" />
+              </Button>
+            </div>
             <Button
               variant="ghost"
               size="sm"
-              className="justify-center gap-2 px-2 text-xs text-muted-foreground md:justify-start"
+              className="justify-center gap-2 px-2 text-sm text-muted-foreground md:justify-start"
               onClick={() => setLang(lang === "zh-CN" ? "en" : "zh-CN")}
               title={t("lang.toggle")}
             >
@@ -195,14 +254,14 @@ export default function App() {
             <Button
               variant="ghost"
               size="sm"
-              className="justify-center gap-2 px-2 text-xs text-muted-foreground md:justify-start"
+              className="justify-center gap-2 px-2 text-sm text-muted-foreground md:justify-start"
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
               title={t("theme.toggle")}
             >
               {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
               <span className="hidden md:inline">{theme === "dark" ? t("theme.toLight") : t("theme.toDark")}</span>
             </Button>
-            <div className="hidden px-2 pb-1 text-[10.5px] leading-4 text-muted-foreground md:block">
+            <div className="hidden px-2 pb-1 text-xs leading-5 text-muted-foreground md:block">
               <p className="truncate">{info?.name ?? "kuake-studio"}</p>
               <p className="truncate">
                 {t(info?.backend === "cli" ? "about.cli" : "about.native")} · v{info?.version ?? "?"}

@@ -116,7 +116,14 @@ OPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 URL="http://127.0.0.1:8787/"
 boot_ok() { curl -sf -o /dev/null "$URL/api/boot"; }
 if ! boot_ok; then
-  (cd "$OPT" && setsid nohup ./kuake-studio --port 8787 --no-open >/dev/null 2>&1 < /dev/null &)
+  LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/kuake-studio"
+  mkdir -p "$LOG_DIR"
+  LOG="$LOG_DIR/studio.log"
+  # 简单轮转：单文件超过 5 MB 时保留一份 .1
+  if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null || echo 0)" -gt 5242880 ]; then
+    mv -f "$LOG" "$LOG.1"
+  fi
+  (cd "$OPT" && setsid nohup ./kuake-studio --port 8787 --no-open >>"$LOG" 2>&1 < /dev/null &)
   for _ in $(seq 1 60); do boot_ok && break; sleep 0.25; done
 fi
 # 无桌面 / 自检场景：只确保服务在线，不弹浏览器

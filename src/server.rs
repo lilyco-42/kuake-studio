@@ -98,14 +98,28 @@ async fn run_progress(
     state.cancels.lock().await.remove(sid);
     // 兜底合成终态：仅当事件流里**没有**出现过 Done/Error 时才补发。
     // 此前无条件补发，导致每条失败命令都推两条一模一样的 error（前端收两次）。
-    if let Ok(Err(e)) = task.handle.join() {
-        if sent_ok && !saw_terminal {
-            let _ = gui_tx
-                .send(serde_json::json!({
-                    "type": "error", "code": 1, "message": e.to_string(), "kind": null
-                }))
-                .await;
+    // 同时覆盖 panic：命令线程 panic 时事件流不会有终态，不补发会让前端永远停在「执行中」。
+    match task.handle.join() {
+        Ok(Err(e)) => {
+            if sent_ok && !saw_terminal {
+                let _ = gui_tx
+                    .send(serde_json::json!({
+                        "type": "error", "code": 1, "message": e.to_string(), "kind": null
+                    }))
+                    .await;
+            }
         }
+        Err(_) => {
+            if sent_ok && !saw_terminal {
+                let _ = gui_tx
+                    .send(serde_json::json!({
+                        "type": "error", "code": 1,
+                        "message": "命令执行线程异常退出（panic），详情见服务日志", "kind": null
+                    }))
+                    .await;
+            }
+        }
+        Ok(Ok(_)) => {}
     }
 }
 

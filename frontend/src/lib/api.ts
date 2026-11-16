@@ -26,13 +26,29 @@ function authHeaders(): HeadersInit {
   return { "Content-Type": "application/json", "X-Kuake-Token": token };
 }
 
+/**
+ * 后端每次进程启动都会换一个随机令牌（防 CSRF）。页面跨过重启后继续用旧令牌，
+ * 所有写操作都会 401 `Unauthorized: bad token`。这里遇到 401 自动重新握手再重试一次，
+ * 用户不需要手动刷新页面。
+ */
+async function withTokenRetry(send: () => Promise<Response>): Promise<Response> {
+  let res = await send();
+  if (res.status === 401) {
+    await boot();
+    res = await send();
+  }
+  return res;
+}
+
 /** 提交命令，拿 session id；事件流随后从 SSE 取 */
 export async function startRun(cmd: string, args: Record<string, unknown>): Promise<string> {
-  const res = await fetch("/api/run", {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify({ cmd, args }),
-  });
+  const res = await withTokenRetry(() =>
+    fetch("/api/run", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ cmd, args }),
+    }),
+  );
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `运行失败 (${res.status})`);
@@ -42,16 +58,20 @@ export async function startRun(cmd: string, args: Record<string, unknown>): Prom
 }
 
 export async function cancelRun(sid: string): Promise<void> {
-  await fetch(`/api/cancel/${sid}`, { method: "POST", headers: authHeaders() });
+  await withTokenRetry(() =>
+    fetch(`/api/cancel/${sid}`, { method: "POST", headers: authHeaders() }),
+  );
 }
 
 /** 把 base64 内容交给后端落盘，返回本地绝对路径（供 upload 命令使用） */
 export async function uploadTemp(name: string, dataB64: string): Promise<{ path: string; name: string; size: number }> {
-  const res = await fetch("/api/upload", {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify({ name, dataB64 }),
-  });
+  const res = await withTokenRetry(() =>
+    fetch("/api/upload", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ name, dataB64 }),
+    }),
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -74,16 +94,18 @@ export async function uploadTempRaw(
   file: Blob,
   signal?: AbortSignal,
 ): Promise<{ path: string; name: string; size: number }> {
-  const res = await fetch("/api/upload/raw", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/octet-stream",
-      "X-Kuake-Token": token,
-      "X-Kuake-File": base64Utf8(name),
-    },
-    body: file,
-    signal,
-  });
+  const res = await withTokenRetry(() =>
+    fetch("/api/upload/raw", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Kuake-Token": token,
+        "X-Kuake-File": base64Utf8(name),
+      },
+      body: file,
+      signal,
+    }),
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -121,11 +143,13 @@ export interface LoginStatus {
 
 /** 开一次扫码登录（受令牌保护）；二维码是 data:image/svg+xml;base64 */
 export async function loginStart(): Promise<LoginStart> {
-  const res = await fetch("/api/login/start", {
-    method: "POST",
-    headers: authHeaders(),
-    body: "{}",
-  });
+  const res = await withTokenRetry(() =>
+    fetch("/api/login/start", {
+      method: "POST",
+      headers: authHeaders(),
+      body: "{}",
+    }),
+  );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -137,11 +161,13 @@ export async function loginStatus(sid: string): Promise<LoginStatus> {
 }
 
 export async function loginCancel(sid: string): Promise<void> {
-  await fetch(`/api/login/cancel/${sid}`, {
-    method: "POST",
-    headers: authHeaders(),
-    body: "{}",
-  });
+  await withTokenRetry(() =>
+    fetch(`/api/login/cancel/${sid}`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: "{}",
+    }),
+  );
 }
 
 export interface RunHandle {

@@ -31,7 +31,7 @@ export function ConsolePanel() {
           <Terminal className="size-3.5" />
           活动日志
           {errCount > 0 && (
-            <span className="rounded bg-destructive/15 px-1 text-[10px] text-destructive">
+            <span className="rounded bg-destructive/15 px-1 text-[11px] text-destructive">
               {errCount}
             </span>
           )}
@@ -44,7 +44,7 @@ export function ConsolePanel() {
           </span>
         )}
         <div className="ml-auto flex items-center gap-1">
-          <span className="text-[11px] text-muted-foreground">{logs.length} 行</span>
+          <span className="text-xs text-muted-foreground">{logs.length} 行</span>
           <Button variant="ghost" size="icon-sm" className="size-7" onClick={clearLogs}>
             <Trash2 className="size-3.5" />
           </Button>
@@ -52,7 +52,7 @@ export function ConsolePanel() {
       </div>
 
       {open && (
-        <div className="h-44 overflow-y-auto border-t px-3 py-2 font-mono text-[11.5px] leading-relaxed">
+        <div className="h-56 overflow-y-auto border-t px-3 py-2 font-mono text-sm leading-relaxed">
           {logs.length === 0 && (
             <p className="text-muted-foreground">暂无活动。任何操作都会在这里留痕。</p>
           )}
