@@ -136,7 +136,9 @@ jobs:
             target: aarch64-linux-android
           - name: ios-arm64
             kind: native
-            os: macos-latest
+            # 与 macos-universal 分开 runner 池：v0.5.13 实测两个 macOS 作业抢同一池时，
+            # 后排队者在 queued 15 分钟后被 GitHub 直接取消（runner 未分配，非编译失败）。
+            os: macos-14
             target: aarch64-apple-ios
           - name: ohos-arm64
             kind: native
