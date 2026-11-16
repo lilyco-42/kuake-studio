@@ -116,6 +116,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # macOS 两个作业（macos-universal / ios-arm64）共用 macos-latest 池：
+      # 并发时后排队者会被 GitHub 直接取消（runner 未分配，非编译失败）。
+      # 串行跑 6 个平台只多花十几分钟，但发布不会再卡在 runner 队列。
+      max-parallel: 1
       matrix:
         include:
           - name: windows-x64
@@ -136,9 +140,9 @@ jobs:
             target: aarch64-linux-android
           - name: ios-arm64
             kind: native
-            # 与 macos-universal 分开 runner 池：v0.5.13 实测两个 macOS 作业抢同一池时，
-            # 后排队者在 queued 15 分钟后被 GitHub 直接取消（runner 未分配，非编译失败）。
-            os: macos-14
+            # 用 macos-latest：macos-14 池对本账号会「分配即取消」（runner_name 为空、1 秒结束）。
+            # 两个 macOS 作业靠 max-parallel: 1 串行，不再抢同一池。
+            os: macos-latest
             target: aarch64-apple-ios
           - name: ohos-arm64
             kind: native
