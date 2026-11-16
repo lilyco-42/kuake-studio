@@ -116,10 +116,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      # macOS 两个作业（macos-universal / ios-arm64）共用 macos-latest 池：
-      # 并发时后排队者会被 GitHub 直接取消（runner 未分配，非编译失败）。
-      # 串行跑 6 个平台只多花十几分钟，但发布不会再卡在 runner 队列。
-      max-parallel: 1
       matrix:
         include:
           - name: windows-x64
@@ -138,12 +134,6 @@ jobs:
             kind: native
             os: ubuntu-latest
             target: aarch64-linux-android
-          - name: ios-arm64
-            kind: native
-            # 用 macos-latest：macos-14 池对本账号会「分配即取消」（runner_name 为空、1 秒结束）。
-            # 两个 macOS 作业靠 max-parallel: 1 串行，不再抢同一池。
-            os: macos-latest
-            target: aarch64-apple-ios
           - name: ohos-arm64
             kind: native
             os: ubuntu-latest
@@ -573,6 +563,109 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # ── iOS：单独作业（macos-latest 池只有一份可用）────────────────────
+  # 两个 macOS 作业并发时，后排队者会被 GitHub 取消（runner 未分配、非编译失败）。
+  # 等 package 的五个平台全部结束后再单独跑，就不会和 macos-universal 抢池。
+  ios-arm64:
+    name: ios-arm64
+    needs: package
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ios-arm64
+
+      - name: 构建（ios arm64 静态库）
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          sdk=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "iPhoneOS SDK: $sdk"
+          export SDKROOT="$sdk"
+          export IPHONEOS_DEPLOYMENT_TARGET=13.0
+          cargo build --release --locked --no-default-features --lib --target aarch64-apple-ios
+
+      - name: 自检（native：纯 arm64 归档 + C ABI 符号）
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib="$PWD/target/aarch64-apple-ios/release/libkuake_studio.a"
+          test -s "$lib"
+          tmp="$RUNNER_TEMP/ks-obj-check"
+          rm -rf "$tmp"; mkdir -p "$tmp"
+          (cd "$tmp" && ar x "$lib")
+          # 整库逐个 .o 校验：任何一个非 arm64 都算失败
+          total=$(find "$tmp" -name "*.o" | wc -l | tr -d "[:space:]")
+          arm=$(find "$tmp" -name "*.o" -exec file {} + | grep -Eci "aarch64|arm64" || true)
+          echo "目标文件 $total 个，其中 arm64 $arm 个"
+          test "$total" -ge 100
+          test "$total" -eq "$arm"
+          # 先落盘再 grep：grep -q 提前退出会让 nm/strings 收到 SIGPIPE，pipefail 下误判失败
+          nm -g "$lib" > "$tmp/syms.txt" 2>/dev/null || true
+          if ! grep -q kuake_studio_version "$tmp/syms.txt"; then
+            strings "$lib" > "$tmp/strings.txt"
+            grep -q kuake_studio_version "$tmp/strings.txt"
+          fi
+          echo "C ABI 符号 kuake_studio_version 已导出"
+
+      - name: 打包（native：静态库 + C 头 + ABI 自检源码，非安装包）
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          name="kuake-studio-$ver-ios-arm64"
+          stage="pkg/$name"
+          mkdir -p "$stage/include" "$stage/tools"
+          cp "target/aarch64-apple-ios/release/libkuake_studio.a" "$stage/"
+          cp LICENSE "$stage/"
+          cp include/kuake_studio.h "$stage/include/"
+          cp tools/abi-selftest.c "$stage/tools/"
+          cat > "$stage/README-native.md" <<'EOS'
+          # kuake-studio 进程内原生库（iOS arm64）
+
+          这个包不是可安装的 App，也没有应用商店签名。内容：
+
+          - libkuake_studio.a：纯 arm64 静态库，导出 kuake_studio_* C ABI
+          - include/kuake_studio.h：头文件
+          - tools/abi-selftest.c：host 架构可编译运行的 ABI 自检
+          - BUILD_INFO.txt：版本 / Rust target / 构建方式
+
+          复现构建：macOS + Xcode 16，rustup target add aarch64-apple-ios，
+          xcrun --sdk iphoneos --show-sdk-path 设入 SDKROOT，
+          IPHONEOS_DEPLOYMENT_TARGET=13.0，
+          cargo build --release --no-default-features --lib --target aarch64-apple-ios。
+
+          宿主 App（iOS Swift）把 .a 链进原生层，自己用 WebView 渲染前端 dist；
+          启动时先调 kuake_studio_set_cookie 注入夸克凭据，
+          再调 kuake_studio_schemas() / kuake_studio_call() 驱动同一套命令。
+          本库不启动 HTTP 服务、不打开浏览器、不读本机 .env、不生成 token。
+
+          许可证见随包 LICENSE（MIT，Copyright (c) 2026 lilyco-42）。
+          桌面三平台（Windows / Linux / macOS）请用对应安装包，不用这个库。
+          EOS
+          cat > "$stage/BUILD_INFO.txt" <<EOS
+          version=$ver
+          rust_target=aarch64-apple-ios
+          crate_type=staticlib
+          features=--no-default-features
+          EOS
+          tar -C pkg -czf "pkg/$name.tar.gz" "$name"
+          ls -l "pkg/$name.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-arm64
+          path: pkg/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
   # ── Android APK：可直接安装的 App（不需要 Android Studio / Gradle）────
   # 用 aapt2 + javac + d8 + zipalign + apksigner 纯命令行打包，
   # 与 package 里的 android-arm64 静态库包并存：那个给宿主 App 链接，
@@ -666,7 +759,7 @@ jobs:
   # ── 打标签时发布到 Releases ──────────────────────────────────────────
   release:
     name: release
-    needs: [package, android-apk]
+    needs: [package, android-apk, ios-arm64]
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
     runs-on: ubuntu-latest
     steps:
