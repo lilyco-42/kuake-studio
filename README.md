@@ -15,6 +15,28 @@ iOS / 鸿蒙发**进程内 FFI 静态库**（宿主 App 自己链原生层 + Web
 
 ## 跑起来
 
+### 一键安装（最快）
+
+不用手动找包/解压：
+
+```bash
+# Linux / macOS
+curl -fsSL https://github.com/lilyco-42/kuake-studio/releases/latest/download/install.sh | bash
+
+# Windows（PowerShell）
+irm https://github.com/lilyco-42/kuake-studio/releases/latest/download/install.ps1 | iex
+```
+
+指定版本 / 卸载：
+
+```bash
+curl -fsSL .../install.sh | bash -s -- v0.5.15
+curl -fsSL .../install.sh | bash -s -- --uninstall
+```
+
+脚本会自动识别系统、下载对应包、用 `SHA256SUMS` 校验、装到用户目录并创建菜单/桌面快捷方式。
+完整教程见 [docs/INSTALL.md](docs/INSTALL.md)。
+
 ### 直接装（推荐）
 
 去 [Releases](https://github.com/lilyco-42/kuake-studio/releases) 下对应平台的包：

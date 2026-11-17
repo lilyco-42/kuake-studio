@@ -766,10 +766,23 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            install
+            docs
+          sparse-checkout-cone-mode: false
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      - name: 放入一键安装脚本与教程
+        run: |
+          cp install/install.sh install/install.ps1 docs/INSTALL.md dist/
+          chmod +x dist/install.sh
+          ls -l dist/install.sh dist/install.ps1 dist/INSTALL.md
 
       - name: 列产物
         run: ls -lR dist

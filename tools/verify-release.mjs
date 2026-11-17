@@ -127,10 +127,14 @@ for (const p of PLATFORMS) {
 }
 const apkAssets = assets.filter((a) => /-android\.apk$/.test(a.name));
 ck('资产齐全 android-apk', apkAssets.length === 1, apkAssets.length + '/1  ' + apkAssets.map((a) => a.name).join(', '));
-// 资产清单 = 8 个平台包 + SHA256SUMS（校验清单本身不是平台产物）
-const payloadAssets = assets.filter((a) => a.name !== 'SHA256SUMS');
+// 资产清单 = 8 个平台包 + SHA256SUMS + 一键安装脚本/教程（后三者不是平台产物）
+const AUX = ['install.sh', 'install.ps1', 'INSTALL.md'];
+const auxAssets = assets.filter((a) => AUX.includes(a.name));
+const payloadAssets = assets.filter((a) => a.name !== 'SHA256SUMS' && !AUX.includes(a.name));
 const sumsAsset = assets.find((a) => a.name === 'SHA256SUMS');
 ck('资产齐全 SHA256SUMS', !!sumsAsset, sumsAsset ? String(sumsAsset.size) + ' B' : '缺失');
+ck('资产齐全 一键安装脚本/教程', AUX.every((n) => assets.some((a) => a.name === n)),
+  auxAssets.map((a) => a.name).join(', ') || '缺失');
 ck('资产总数', payloadAssets.length === 8, String(payloadAssets.length) + ' 个平台包（期望 8）');
 
 // ── 匿名可下载 ──────────────────────────────────────────────────────────
@@ -189,15 +193,16 @@ for (const a of assets) {
       const m = line.match(/^([0-9a-f]{64})\s+\*?(.+)$/);
       if (m) map.set(m[2].trim(), m[1]);
     }
-    const missing = payloadAssets.map((a) => a.name).filter((n) => !map.has(n));
-    ck('SHA256SUMS 覆盖全部平台包', missing.length === 0,
-      missing.length ? '缺少: ' + missing.join(', ') : payloadAssets.length + ' 个');
-    const bad = payloadAssets.filter((a) => {
+    const sumTargets = [...payloadAssets, ...auxAssets];
+    const missing = sumTargets.map((a) => a.name).filter((n) => !map.has(n));
+    ck('SHA256SUMS 覆盖全部资产', missing.length === 0,
+      missing.length ? '缺少: ' + missing.join(', ') : sumTargets.length + ' 个');
+    const bad = sumTargets.filter((a) => {
       const f = path.join(dir, a.name);
       return !fs.existsSync(f) || shaOf(f) !== map.get(a.name);
     });
     ck('SHA256SUMS 哈希一致', bad.length === 0,
-      bad.length ? '不一致: ' + bad.join(', ') : payloadAssets.length + ' 个');
+      bad.length ? '不一致: ' + bad.join(', ') : sumTargets.length + ' 个');
   }
 }
 
