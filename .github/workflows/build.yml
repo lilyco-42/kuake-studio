@@ -317,6 +317,7 @@ jobs:
           cp README.md "$stage/"
           cp LICENSE "$stage/"
           cp assets/kuake-studio.desktop assets/kuake-studio-1024.png "$stage/"
+          cp -r assets/icons "$stage/icons"
           cp tools/install-linux-desktop.sh "$stage/install.sh"
           cp -r frontend/dist "$stage/dist"
           # 便携版启动器：不能用仓库里的 run.sh（它写死了本机共享 target 路径）
@@ -366,6 +367,8 @@ jobs:
           cp README.md "$stage/"
           cp LICENSE "$stage/"
           cp -r frontend/dist "$stage/dist"
+          cp tools/install-macos.sh "$stage/"
+          chmod +x "$stage/install-macos.sh"
 
           # .app 包：exe 放在 Contents/MacOS/ 下，dist 也放这儿（default_dist 认 exe 同级 dist）
           app="pkg/kuake-studio-$ver-macos-universal/kuake-studio.app"

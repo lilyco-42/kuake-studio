@@ -83,6 +83,7 @@ fi
 if [ "${1:-}" = "--uninstall" ]; then
   cleanup_legacy_systemd
   rm -f "$AUTOSTART" "$APPS/kuake-studio.desktop" "$ICON_DIR/kuake-studio.png" "$DESKTOP_DIR/夸克网盘.desktop"
+  rm -f "$USER_HOME"/.local/share/icons/hicolor/*/apps/kuake-studio.png
   rm -rf "$OPT"
   echo "✓ 已卸载 kuake-studio 桌面入口（凭据与下载文件未动）"
   if [ "$LEGACY_CLEANED" = 1 ]; then
@@ -105,7 +106,17 @@ fi
 mkdir -p "$OPT" "$AUTOSTART_DIR" "$APPS" "$ICON_DIR" "$DESKTOP_DIR"
 cp -f "$BIN" "$OPT/kuake-studio"; chmod 755 "$OPT/kuake-studio"
 rm -rf "$OPT/dist"; cp -r "$SRC/dist" "$OPT/dist"
-[ -f "$SRC/kuake-studio-1024.png" ] && cp -f "$SRC/kuake-studio-1024.png" "$ICON_DIR/kuake-studio.png" || true
+if [ -d "$SRC/icons" ]; then
+  for f in "$SRC"/icons/*x*.png; do
+    [ -f "$f" ] || continue
+    size="$(basename "$f" .png)"
+    d="$USER_HOME/.local/share/icons/hicolor/$size/apps"
+    mkdir -p "$d"
+    cp -f "$f" "$d/kuake-studio.png"
+  done
+else
+  [ -f "$SRC/kuake-studio-1024.png" ] && cp -f "$SRC/kuake-studio-1024.png" "$ICON_DIR/kuake-studio.png" || true
+fi
 [ -f "$SRC/README.md" ] && cp -f "$SRC/README.md" "$OPT/README.md" || true
 
 # 一键打开：探活 → 服务没起就拉起（带托盘，不弹浏览器）→ 打开浏览器

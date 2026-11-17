@@ -239,6 +239,18 @@ kuake-studio --mcp          # 作为 MCP server 暴露给 AI
 kuake-studio --schema       # 打印 25 条命令的 JSON Schema
 ```
 
+### 8. 图标与快捷启动（v0.5.14）
+
+| 平台 | 入口 | 图标 |
+| --- | --- | --- |
+| Windows | MSI 装完后出现在**开始菜单 + 桌面** | 安装包内 `.ico`（`ARPPRODUCTICON`） |
+| Linux | `./install.sh` 写**应用菜单 + 桌面图标 + 开机自启** | hicolor `48/64/128/256/512/1024` |
+| macOS | 解压后运行 `./install-macos.sh` → 复制到 `/Applications`（无权限回退 `~/Applications`），`lsregister` 刷新 Launchpad | `AppIcon.icns` |
+| Android | 安装后直接出现在桌面 | `mipmap-*` 五档 `ic_launcher.png` |
+
+浏览器标签也有 favicon（`icon-32/180/192/512`），移动端「添加到主屏」用 `apple-touch-icon`。
+系统托盘/菜单栏三平台都有：Windows 托盘、macOS 菜单栏（NSStatusItem）、Linux StatusNotifier。
+
 ## 功能
 
 | 页面 | 能力 |
