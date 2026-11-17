@@ -19,7 +19,7 @@ curl -fsSL https://github.com/lilyco-42/kuake-studio/releases/latest/download/in
 指定版本：
 
 ```bash
-curl -fsSL https://github.com/lilyco-42/kuake-studio/releases/latest/download/install.sh | bash -s -- v0.5.15
+curl -fsSL https://github.com/lilyco-42/kuake-studio/releases/latest/download/install.sh | bash -s -- v0.5.16
 ```
 
 卸载（不动凭据与已下载文件）：
@@ -38,7 +38,7 @@ irm https://github.com/lilyco-42/kuake-studio/releases/latest/download/install.p
 
 ```powershell
 irm https://github.com/lilyco-42/kuake-studio/releases/latest/download/install.ps1 -OutFile install.ps1
-.\install.ps1 -Version v0.5.15
+.\install.ps1 -Version v0.5.16
 ```
 
 安装位置：`%LOCALAPPDATA%\Programs\kuake-studio`，并创建开始菜单 + 桌面「夸克网盘」快捷方式。

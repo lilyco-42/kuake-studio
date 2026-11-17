@@ -109,6 +109,20 @@ jobs:
           grep -q "没有发现旧版" <<<"$out2"
           echo "installer cleanup OK"
 
+      # 一键安装脚本：bash 语法 + install.ps1 关键字（Windows 侧再用真 pwsh 解析一次）
+      - name: 一键安装脚本检查
+        run: |
+          set -euo pipefail
+          bash -n install/install.sh
+          bash -n tools/install-macos.sh
+          python3 - <<'PY'
+          import pathlib
+          ps = pathlib.Path("install/install.ps1").read_text(encoding="utf-8-sig")
+          for token in ["param(", "Invoke-WebRequest", "SHA256SUMS", "WScript.Shell", "CreateShortcut"]:
+              assert token in ps, f"install.ps1 缺少 {token}"
+          print("install.ps1 关键字检查 OK")
+          PY
+
   # ── 各平台打包 ───────────────────────────────────────────────────────
   package:
     name: ${{ matrix.name }}
@@ -233,6 +247,15 @@ jobs:
           if ($vi.FileVersion -notlike "$ver*" -or $vi.ProductVersion -notlike "$ver*") {
             throw "exe 版本资源与 Cargo.toml 不一致: $ver"
           }
+
+      - name: 校验 install.ps1 语法
+        if: matrix.name == 'windows-x64'
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("install/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+          Write-Host "install.ps1 语法 OK"
 
       - name: 打包（windows：便携 zip + MSI）
         if: matrix.name == 'windows-x64'
@@ -369,6 +392,8 @@ jobs:
           cp -r frontend/dist "$stage/dist"
           cp tools/install-macos.sh "$stage/"
           chmod +x "$stage/install-macos.sh"
+          bash -n "$stage/install-macos.sh"
+          bash -n install/install.sh
 
           # .app 包：exe 放在 Contents/MacOS/ 下，dist 也放这儿（default_dist 认 exe 同级 dist）
           app="pkg/kuake-studio-$ver-macos-universal/kuake-studio.app"
