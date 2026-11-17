@@ -127,7 +127,11 @@ for (const p of PLATFORMS) {
 }
 const apkAssets = assets.filter((a) => /-android\.apk$/.test(a.name));
 ck('资产齐全 android-apk', apkAssets.length === 1, apkAssets.length + '/1  ' + apkAssets.map((a) => a.name).join(', '));
-ck('资产总数', assets.length === 8, String(assets.length) + ' 个（期望 8）');
+// 资产清单 = 8 个平台包 + SHA256SUMS（校验清单本身不是平台产物）
+const payloadAssets = assets.filter((a) => a.name !== 'SHA256SUMS');
+const sumsAsset = assets.find((a) => a.name === 'SHA256SUMS');
+ck('资产齐全 SHA256SUMS', !!sumsAsset, sumsAsset ? String(sumsAsset.size) + ' B' : '缺失');
+ck('资产总数', payloadAssets.length === 8, String(payloadAssets.length) + ' 个平台包（期望 8）');
 
 // ── 匿名可下载 ──────────────────────────────────────────────────────────
 const first = assets[0];
@@ -172,6 +176,29 @@ for (const a of assets) {
   if (!fs.existsSync(file)) { ck('SHA256 ' + a.name, false, '文件缺失'); continue; }
   const got = shaOf(file);
   ck('SHA256 ' + a.name, !!want && got === want, got.slice(0, 12) + '… 对照 GH digest');
+}
+
+// ── SHA256SUMS：必须覆盖全部平台包，且逐行哈希一致 ────────────────────────
+{
+  const file = path.join(dir, 'SHA256SUMS');
+  if (!fs.existsSync(file)) {
+    ck('SHA256SUMS 内容', false, '文件缺失');
+  } else {
+    const map = new Map();
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      const m = line.match(/^([0-9a-f]{64})\s+\*?(.+)$/);
+      if (m) map.set(m[2].trim(), m[1]);
+    }
+    const missing = payloadAssets.map((a) => a.name).filter((n) => !map.has(n));
+    ck('SHA256SUMS 覆盖全部平台包', missing.length === 0,
+      missing.length ? '缺少: ' + missing.join(', ') : payloadAssets.length + ' 个');
+    const bad = payloadAssets.filter((a) => {
+      const f = path.join(dir, a.name);
+      return !fs.existsSync(f) || shaOf(f) !== map.get(a.name);
+    });
+    ck('SHA256SUMS 哈希一致', bad.length === 0,
+      bad.length ? '不一致: ' + bad.join(', ') : payloadAssets.length + ' 个');
+  }
 }
 
 for (const p of PLATFORMS) {
