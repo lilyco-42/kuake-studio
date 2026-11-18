@@ -31,8 +31,12 @@ jobs:
           if (-not (Test-Path (Join-Path $dest "kuake-studio.exe"))) { throw "exe 未安装到 $dest" }
           $programs = [Environment]::GetFolderPath("Programs")
           $desktop = [Environment]::GetFolderPath("Desktop")
-          foreach ($p in @((Join-Path $programs "夸克网盘.lnk"), (Join-Path $desktop "夸克网盘.lnk"))) {
-            if (-not (Test-Path $p)) { throw "缺少快捷方式 $p" }
+          $names = @("夸克网盘", "kuake-studio")
+          foreach ($dir in @($programs, $desktop)) {
+            $hit = Get-ChildItem $dir -Filter "*.lnk" -ErrorAction SilentlyContinue |
+              Where-Object { $names -contains $_.BaseName } |
+              Select-Object -First 1
+            if (-not $hit) { throw "缺少快捷方式：$dir" }
           }
           Write-Host "✓ 安装目录与开始菜单/桌面快捷方式都在"
 

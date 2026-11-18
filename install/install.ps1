@@ -50,12 +50,26 @@ Move-Item $src $dest
 
 $exe = Join-Path $dest "kuake-studio.exe"
 $ws = New-Object -ComObject WScript.Shell
+# 中文 Windows 用「夸克网盘」；非中文系统中文文件名会被转成 ???? 导致 Save 失败，
+# 此时回退英文名 kuake-studio.lnk（开始菜单/桌面都能正常显示）。
 foreach ($dir in @([Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Desktop"))) {
-  $lnk = $ws.CreateShortcut((Join-Path $dir "夸克网盘.lnk"))
-  $lnk.TargetPath = $exe
-  $lnk.WorkingDirectory = $dest
-  $lnk.IconLocation = "$exe,0"
-  $lnk.Save()
+  if (-not (Test-Path $dir)) { continue }
+  $saved = $false
+  foreach ($name in @("夸克网盘", "kuake-studio")) {
+    $lnkPath = Join-Path $dir "$name.lnk"
+    try {
+      $lnk = $ws.CreateShortcut($lnkPath)
+      $lnk.TargetPath = $exe
+      $lnk.WorkingDirectory = $dest
+      $lnk.IconLocation = "$exe,0"
+      $lnk.Save()
+      $saved = $true
+      break
+    } catch {
+      Remove-Item $lnkPath -Force -ErrorAction SilentlyContinue
+    }
+  }
+  if (-not $saved) { throw "无法在 $dir 创建快捷方式" }
 }
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
