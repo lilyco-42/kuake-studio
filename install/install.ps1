@@ -43,6 +43,8 @@ $exeHit = Get-ChildItem -Path $stage -Recurse -Filter "kuake-studio.exe" -File |
 if (-not $exeHit) { throw "解压后没有找到 kuake-studio.exe" }
 $src = $exeHit.Directory.FullName
 $dest = Join-Path $env:LOCALAPPDATA "Programs\kuake-studio"
+# runner / 精简系统上 %LOCALAPPDATA%\Programs 可能不存在，Move-Item 会因父目录缺失失败
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
 if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
 Move-Item $src $dest
 
