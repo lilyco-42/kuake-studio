@@ -1,0 +1,66 @@
+name: windows-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要验证的 Release 标签（如 v0.5.16）"
+        required: true
+        default: v0.5.16
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: windows-install-smoke
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            install
+          sparse-checkout-cone-mode: false
+
+      - name: 一键安装（install.ps1 从 Release 下载）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          ./install/install.ps1 -Version "${{ github.event.inputs.tag }}"
+          $dest = Join-Path $env:LOCALAPPDATA "Programs\kuake-studio"
+          if (-not (Test-Path (Join-Path $dest "kuake-studio.exe"))) { throw "exe 未安装到 $dest" }
+          $programs = [Environment]::GetFolderPath("Programs")
+          $desktop = [Environment]::GetFolderPath("Desktop")
+          foreach ($p in @((Join-Path $programs "夸克网盘.lnk"), (Join-Path $desktop "夸克网盘.lnk"))) {
+            if (-not (Test-Path $p)) { throw "缺少快捷方式 $p" }
+          }
+          Write-Host "✓ 安装目录与开始菜单/桌面快捷方式都在"
+
+      - name: 启动 exe 并验证 /api/boot
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $want = "${{ github.event.inputs.tag }}".TrimStart("v")
+          $exe = Join-Path $env:LOCALAPPDATA "Programs\kuake-studio\kuake-studio.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList "--port", "8788", "--no-open" -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+              $boot = Invoke-RestMethod "http://127.0.0.1:8788/api/boot" -TimeoutSec 3
+              Write-Host ($boot | ConvertTo-Json -Compress)
+              if ($boot.version -eq $want) { $ok = $true; break }
+            } catch { }
+          }
+          if (-not $ok) { throw "exe 启动后 /api/boot 未返回 $want" }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "✓ Windows exe 启动与 /api/boot 验证通过（$want）"
+
+      - name: 清理
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process kuake-studio -ErrorAction SilentlyContinue | Stop-Process -Force
+          Remove-Item (Join-Path $env:LOCALAPPDATA "Programs\kuake-studio") -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path ([Environment]::GetFolderPath("Programs")) "夸克网盘.lnk") -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path ([Environment]::GetFolderPath("Desktop")) "夸克网盘.lnk") -Force -ErrorAction SilentlyContinue
