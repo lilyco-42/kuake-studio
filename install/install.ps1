@@ -34,8 +34,14 @@ $got = (Get-FileHash (Join-Path $tmp $pkg) -Algorithm SHA256).Hash.ToLower()
 if ($got -ne $want.ToLower()) { throw "SHA256 校验失败（期望 $want，实际 $got）" }
 Write-Host "✓ SHA256 校验通过"
 
-Expand-Archive (Join-Path $tmp $pkg) -DestinationPath $tmp -Force
-$src = Join-Path $tmp "kuake-studio-$ver-windows-x64"
+# 便携 zip 是「散文件」结构（exe/dist/run.bat 在根）；未来若加外层目录，
+# 这里按 exe 反查也能兼容，避免硬编码目录名。
+$stage = Join-Path $tmp "stage"
+New-Item -ItemType Directory -Force -Path $stage | Out-Null
+Expand-Archive (Join-Path $tmp $pkg) -DestinationPath $stage -Force
+$exeHit = Get-ChildItem -Path $stage -Recurse -Filter "kuake-studio.exe" -File | Select-Object -First 1
+if (-not $exeHit) { throw "解压后没有找到 kuake-studio.exe" }
+$src = $exeHit.Directory.FullName
 $dest = Join-Path $env:LOCALAPPDATA "Programs\kuake-studio"
 if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
 Move-Item $src $dest
