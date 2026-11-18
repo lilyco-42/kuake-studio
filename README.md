@@ -30,7 +30,7 @@ irm https://github.com/lilyco-42/kuake-studio/releases/latest/download/install.p
 指定版本 / 卸载：
 
 ```bash
-curl -fsSL .../install.sh | bash -s -- v0.5.16
+curl -fsSL .../install.sh | bash -s -- v0.5.17
 curl -fsSL .../install.sh | bash -s -- --uninstall
 ```
 

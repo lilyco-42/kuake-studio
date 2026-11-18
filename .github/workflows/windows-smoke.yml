@@ -22,11 +22,14 @@ jobs:
             install
           sparse-checkout-cone-mode: false
 
-      - name: 一键安装（install.ps1 从 Release 下载）
+      - name: 一键安装（从 Release 下载 install.ps1 并执行）
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          ./install/install.ps1 -Version "${{ github.event.inputs.tag }}"
+          $tag = "${{ github.event.inputs.tag }}"
+          $url = "https://github.com/lilyco-42/kuake-studio/releases/download/$tag/install.ps1"
+          Invoke-WebRequest $url -OutFile "$env:TEMP\kuake-install.ps1"
+          & "$env:TEMP\kuake-install.ps1" -Version $tag
           $dest = Join-Path $env:LOCALAPPDATA "Programs\kuake-studio"
           if (-not (Test-Path (Join-Path $dest "kuake-studio.exe"))) { throw "exe 未安装到 $dest" }
           $programs = [Environment]::GetFolderPath("Programs")
