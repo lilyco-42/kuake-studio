@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
-import { readFileAsBase64, uploadTemp } from "@/lib/api";
+import { uploadTempRaw } from "@/lib/api";
 import { formatBytes, joinPath } from "@/lib/format";
 import { useRunner } from "@/lib/store";
 import type { ArgSchema } from "@/lib/types";
@@ -114,8 +114,9 @@ export function UploadDialog({
     }
     setPhase("staging");
     try {
-      const b64 = await readFileAsBase64(file);
-      const staged = await uploadTemp(file.name, b64);
+      // 走 2 GiB 的原始二进制暂存路由：旧 base64 JSON 路由会被 axum 默认
+      // 2 MiB body 上限挡住，用户体感就是「2MB 左右的文件传不上去」。
+      const staged = await uploadTempRaw(file.name, file);
       setPhase("uploading");
       const allowed = new Set(args.map((a) => a.name));
       const payload: Record<string, unknown> = {};

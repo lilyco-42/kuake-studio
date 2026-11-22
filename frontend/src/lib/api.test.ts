@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { boot, startRun } from "@/lib/api";
+import { boot, startRun, uploadTempRaw } from "@/lib/api";
 
 const realFetch = globalThis.fetch;
 
@@ -41,6 +41,35 @@ describe("token 自愈", () => {
       expect(sid).toBe("sid-1");
       expect(bootCalls).toBe(2);
       expect(sentTokens).toEqual(["old-token", "fresh-token"]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+describe("上传暂存", () => {
+  test("大文件走原始二进制路由，不读成 base64", async () => {
+    try {
+      const seen: { url: string; headers: Record<string, string>; body: unknown }[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push({
+          url: String(input),
+          headers: (init?.headers ?? {}) as Record<string, string>,
+          body: init?.body,
+        });
+        return json({ path: "/tmp/staged.bin", name: "big.bin", size: 3 * 1024 * 1024 });
+      }) as typeof fetch;
+
+      const blob = new Blob([new Uint8Array(3 * 1024 * 1024)], {
+        type: "application/octet-stream",
+      });
+      const staged = await uploadTempRaw("big.bin", blob);
+
+      expect(staged).toEqual({ path: "/tmp/staged.bin", name: "big.bin", size: 3145728 });
+      expect(seen).toHaveLength(1);
+      expect(seen[0].url).toBe("/api/upload/raw");
+      expect(seen[0].headers["Content-Type"]).toBe("application/octet-stream");
+      expect(seen[0].headers["X-Kuake-File"]).toBe(btoa("big.bin"));
+      expect(seen[0].body).toBe(blob);
     } finally {
       globalThis.fetch = realFetch;
     }
