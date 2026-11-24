@@ -39,6 +39,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { CommandDialog } from "@/components/command-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { InfoDialog } from "@/components/info-dialog";
+import { ShareResultDialog } from "@/components/share-result-dialog";
 import { SearchView } from "@/components/views/search-view";
 import { UploadDialog } from "@/components/upload-dialog";
 import { DropUpload } from "@/components/drop-upload";
@@ -47,6 +48,7 @@ import { fileIcon } from "@/components/file-icon";
 import { useRunner } from "@/lib/store";
 import { formatBytes, formatTime, joinPath, relativeTime, splitPath } from "@/lib/format";
 import { useI18n } from "@/lib/i18n";
+import { extractShareLinks } from "@/lib/share-links";
 import type { Lang } from "@/lib/i18n-core";
 import type { ArgSchema, CommandSchema, KuakeFile } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -118,6 +120,7 @@ export function FilesView({
   const [history, setHistory] = React.useState<string[]>([]);
   const [searchOpen, setSearchOpen] = React.useState(initialSearchOpen && searchEnabled);
   const [searchRefreshKey, setSearchRefreshKey] = React.useState(0);
+  const [shareResult, setShareResult] = React.useState<{ links: string[]; target: KuakeFile } | null>(null);
 
   const argsOf = React.useCallback(
     (name: string): ArgSchema[] => schemas.find((s) => s.name === name)?.args ?? [],
@@ -602,11 +605,9 @@ export function FilesView({
         preset={dialog.kind === "share" ? { path: targetPath(dialog) } : undefined}
         submitLabel={t("files.createShare")}
         onSuccess={(data) => {
-          const url = (data as { share_url?: string } | null)?.share_url;
-          if (url) {
-            void navigator.clipboard?.writeText(url).catch(() => {});
-            toast.success(t("files.shareCopied"), { description: url });
-          }
+          const links = extractShareLinks(data);
+          if (dialog.kind === "share") setShareResult({ links, target: dialog.target });
+          if (links[0]) void navigator.clipboard?.writeText(links[0]).catch(() => {});
           setSearchRefreshKey((n) => n + 1);
         }}
       />
@@ -628,6 +629,30 @@ export function FilesView({
         onOpenChange={(o) => !o && close()}
         target={dialog.kind === "decrypt" ? dialog.target : null}
         cloudPath={dialog.kind === "decrypt" ? targetPath(dialog) : ""}
+      />
+
+      <ShareResultDialog
+        open={shareResult !== null}
+        onOpenChange={(o) => !o && setShareResult(null)}
+        links={shareResult?.links ?? []}
+        title={shareResult ? t("files.createShareLink") : ""}
+        onCreateAnother={
+          shareResult
+            ? () => {
+                const target = shareResult.target;
+                setShareResult(null);
+                setDialog({ kind: "share", target });
+              }
+            : undefined
+        }
+        onViewShares={
+          onOpenShares
+            ? () => {
+                setShareResult(null);
+                onOpenShares();
+              }
+            : undefined
+        }
       />
 
       <InfoDialog

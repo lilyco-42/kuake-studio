@@ -77,3 +77,45 @@ export function sharesForItem(
 ): KuakeShare[] {
   return index.get(fullItemPath(item, baseDir)) || [];
 }
+
+
+/** run("share") 返回的是夸克原始信封，链接可能在顶层或 data 下。 */
+export type CommandEnvelope<T = Record<string, unknown>> = {
+  data?: T | null;
+} & T;
+
+/** 从 create-share 的结果里尽力提取分享链接，兼容 share_url / link / url / 短码。 */
+export function extractShareLinks(result: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const visit = (value: unknown, depth: number) => {
+    if (!value || typeof value !== 'object' || depth > 4) return;
+    const obj = value as Record<string, unknown>;
+    for (const key of ['share_url', 'shareUrl', 'url', 'link']) {
+      const raw = obj[key];
+      if (typeof raw === 'string' && raw.trim()) {
+        const url = raw.trim();
+        if (!seen.has(url)) {
+          seen.add(url);
+          out.push(url);
+        }
+      }
+    }
+    for (const key of ['pwd_id', 'share_id', 'pwdId', 'shareId']) {
+      const raw = obj[key];
+      if (typeof raw === 'string' && raw.trim()) {
+        const url = 'https://pan.quark.cn/s/' + raw.trim();
+        if (!seen.has(url)) {
+          seen.add(url);
+          out.push(url);
+        }
+      }
+    }
+    if (obj.data && typeof obj.data === 'object') visit(obj.data, depth + 1);
+    if (Array.isArray(obj.list)) {
+      for (const item of obj.list.slice(0, 20)) visit(item, depth + 1);
+    }
+  };
+  visit(result, 0);
+  return out;
+}

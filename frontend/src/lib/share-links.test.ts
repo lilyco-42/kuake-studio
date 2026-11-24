@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { indexSharesByPath, normalizeCloudPath, sharesForItem } from "@/lib/share-links";
+import { extractShareLinks, indexSharesByPath, normalizeCloudPath, sharesForItem } from "@/lib/share-links";
 import type { KuakeShare } from "@/lib/types";
 
 const item = { path: "/06_待整理/IMG001.webp", file_name: "IMG001.webp" };
@@ -29,6 +29,16 @@ describe("share-links", () => {
   test("path normalization", () => {
     expect(normalizeCloudPath("a" + String.fromCharCode(92) + "b///")).toBe("/a/b");
     expect(normalizeCloudPath("")).toBe("/");
+  });
+
+  test("extracts links from create-share result", () => {
+    expect(extractShareLinks({ data: { share_url: "https://pan.quark.cn/s/abc" } })).toEqual([
+      "https://pan.quark.cn/s/abc",
+    ]);
+    expect(extractShareLinks({ pwd_id: "xyz", link: "https://pan.quark.cn/s/link" })).toEqual([
+      "https://pan.quark.cn/s/link",
+      "https://pan.quark.cn/s/xyz",
+    ]);
   });
 
   test("only matches same file in same folder", () => {
