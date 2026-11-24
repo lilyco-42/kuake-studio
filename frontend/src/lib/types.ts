@@ -72,6 +72,8 @@ export interface KuakeUser {
 export interface KuakeShare {
   share_id?: string;
   pwd_id?: string;
+  /** 分享所在父目录；recover_share 会用它判断是不是刚分享的那一项 */
+  path_info?: string;
   title?: string;
   share_url?: string;
   share_type?: number;

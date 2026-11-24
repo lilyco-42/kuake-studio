@@ -4,7 +4,10 @@ import {
   Check,
   Copy,
   CornerDownRight,
+  ExternalLink,
   FileSearch,
+  Info,
+  Link2,
   Loader2,
   RefreshCw,
   Search,
@@ -20,7 +23,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useRunner } from "@/lib/store";
 import { useI18n } from "@/lib/i18n";
 import { formatBytes, parentPath, relativeTime } from "@/lib/format";
-import type { SearchData, SearchHit } from "@/lib/types";
+import type { CommandSchema, KuakeShare, SearchData, SearchHit } from "@/lib/types";
+import { indexSharesByPath, sharesForItem, type ShareListResult } from "@/lib/share-links";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
@@ -102,7 +106,19 @@ function HighlightedName({ raw, name }: { raw?: string; name: string }) {
   );
 }
 
-export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void }) {
+export function SearchView({
+  onOpenDir,
+  onOpenItem,
+  onShare,
+  schemas = [],
+  compact = false,
+}: {
+  onOpenDir: (path: string) => void;
+  onOpenItem?: (item: SearchHit) => void;
+  onShare?: (item: SearchHit) => void;
+  schemas?: CommandSchema[];
+  compact?: boolean;
+}) {
   const { run, booted } = useRunner();
   const { t, lang } = useI18n();
   const [q, setQ] = React.useState("");
@@ -115,6 +131,8 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
   const [loadingMore, setLoadingMore] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState<string | null>(null);
+  const [shareIndex, setShareIndex] = React.useState<Map<string, KuakeShare[]>>(new Map());
+  const canListShares = schemas.some((s) => s.name === "share-list");
 
   // 停手 350ms 才发请求：每敲一个字就打一次全盘搜索太贵了
   React.useEffect(() => {
@@ -156,6 +174,23 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
     // nonce 让「同关键词按回车 / 点重试」也能强制重跑一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [booted, term, nonce, run]);
+
+  React.useEffect(() => {
+    if (!canListShares || hits.length === 0) {
+      setShareIndex(new Map());
+      return;
+    }
+    let alive = true;
+    run<ShareListResult>("share-list", { page: 1, size: 100 }, t("op.list"))
+      .then((d) => {
+        if (!alive) return;
+        setShareIndex(indexSharesByPath(d?.list ?? [], hits.slice(0, 50)));
+      })
+      .catch(() => alive && setShareIndex(new Map()));
+    return () => {
+      alive = false;
+    };
+  }, [hits, canListShares, run, t]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -204,13 +239,13 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
   const usable = (h: SearchHit) => Boolean(h.path) && !h.path_partial;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="border-b px-4 py-3">
+    <div className={cn("flex min-h-0 flex-1 flex-col", compact && "max-h-[46vh]")}>
+      <div className={cn("border-b px-4", compact ? "py-2" : "py-3")}>
         <form onSubmit={submit} className="flex items-center gap-2">
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              autoFocus
+              autoFocus={!compact}
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder={t("search.placeholder")}
@@ -322,12 +357,49 @@ export function SearchView({ onOpenDir }: { onOpenDir: (path: string) => void })
                       >
                         {h.path || t("search.noPath")}
                       </div>
-                      <div className="mt-1 flex items-center gap-3 text-[11px] text-muted-foreground">
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                         <span>{h.dir ? "—" : formatBytes(h.size)}</span>
                         <span>{relativeTime(h.mtime || h.updated_at, lang)}</span>
+                        {sharesForItem(shareIndex, h)
+                          .filter((s) => Boolean(s.share_url))
+                          .slice(0, 2)
+                          .map((s) => (
+                            <a
+                              key={s.share_url}
+                              href={s.share_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 rounded bg-success/10 px-1.5 py-0.5 text-[10px] text-success hover:underline"
+                              title={s.share_url}
+                            >
+                              <Link2 className="size-3" />
+                              {t("search.linkedShare")}
+                              <ExternalLink className="size-2.5" />
+                            </a>
+                          ))}
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
+                      {onOpenItem ? (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          title={t("search.details")}
+                          onClick={() => onOpenItem(h)}
+                        >
+                          <Info className="size-4" />
+                        </Button>
+                      ) : null}
+                      {onShare ? (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          title={t("files.createShare")}
+                          onClick={() => onShare(h)}
+                        >
+                          <Link2 className="size-4" />
+                        </Button>
+                      ) : null}
                       <Button
                         variant="ghost"
                         size="icon-sm"

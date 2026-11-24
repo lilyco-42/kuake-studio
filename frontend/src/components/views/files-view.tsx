@@ -16,8 +16,10 @@ import {
   Pencil,
   RefreshCw,
   Scissors,
+  Search as SearchIcon,
   Trash2,
   Upload as UploadIcon,
+  X,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +39,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { CommandDialog } from "@/components/command-dialog";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { InfoDialog } from "@/components/info-dialog";
+import { SearchView } from "@/components/views/search-view";
 import { UploadDialog } from "@/components/upload-dialog";
 import { DropUpload } from "@/components/drop-upload";
 import { DecryptDialog } from "@/components/decrypt-dialog";
@@ -86,9 +89,15 @@ type DialogState =
 export function FilesView({
   schemas,
   jump,
+  searchEnabled = false,
+  initialSearchOpen = false,
+  onOpenShares,
 }: {
   schemas: CommandSchema[];
   jump?: { path: string; nonce: number } | null;
+  searchEnabled?: boolean;
+  initialSearchOpen?: boolean;
+  onOpenShares?: () => void;
 }) {
   const { run, booted } = useRunner();
   const { t, lang } = useI18n();
@@ -107,6 +116,7 @@ export function FilesView({
   const [confirmBatchDelete, setConfirmBatchDelete] = React.useState(false);
   const [selected, setSelected] = React.useState<string[]>([]);
   const [history, setHistory] = React.useState<string[]>([]);
+  const [searchOpen, setSearchOpen] = React.useState(initialSearchOpen && searchEnabled);
 
   const argsOf = React.useCallback(
     (name: string): ArgSchema[] => schemas.find((s) => s.name === name)?.args ?? [],
@@ -147,6 +157,10 @@ export function FilesView({
     if (booted) void load(navPath, navNonce > 0 ? { pushHistory: true } : undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [booted, navNonce]);
+
+  React.useEffect(() => {
+    if (initialSearchOpen && searchEnabled) setSearchOpen(true);
+  }, [initialSearchOpen, searchEnabled]);
 
   const sorted = React.useMemo(() => {
     const items = [...dir.items];
@@ -192,6 +206,7 @@ export function FilesView({
   };
 
   const close = () => setDialog({ kind: "none" });
+  const infoTarget = dialog.kind === "info" ? dialog.target : null;
   const targetPath = (d: DialogState) =>
     d.kind === "rename" ||
       d.kind === "move" ||
@@ -235,6 +250,21 @@ export function FilesView({
           <Button variant="ghost" size="icon-sm" onClick={() => void load(dir.path)} title={t("common.refresh")}>
             <RefreshCw className={cn("size-4", dir.loading && "animate-spin")} />
           </Button>
+          {searchEnabled ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setSearchOpen((v) => !v)}
+              title={t("files.searchInline")}
+            >
+              <SearchIcon className={cn("size-4", searchOpen && "text-primary")} />
+            </Button>
+          ) : null}
+          {onOpenShares ? (
+            <Button variant="ghost" size="icon-sm" onClick={onOpenShares} title={t("files.openShares")}>
+              <Link2 className="size-4" />
+            </Button>
+          ) : null}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon-sm" title={t("files.sort")}>
@@ -275,6 +305,33 @@ export function FilesView({
         <span>{t("files.total", { size: formatBytes(counts.bytes) })}</span>
         <span className="ml-auto truncate font-mono">{dir.path}</span>
       </div>
+
+      {searchOpen && searchEnabled ? (
+        <div className="border-b bg-muted/20">
+          <div className="flex items-center gap-2 px-4 pt-2 text-[11px] text-muted-foreground">
+            <span>{t("files.searchHint")}</span>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="ml-auto size-6"
+              onClick={() => setSearchOpen(false)}
+              title="关闭"
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+          <SearchView
+            compact
+            schemas={schemas}
+            onOpenDir={(path) => {
+              setSearchOpen(false);
+              void load(path, { pushHistory: true });
+            }}
+            onOpenItem={(item) => setDialog({ kind: "info", target: item })}
+            onShare={(item) => setDialog({ kind: "share", target: item })}
+          />
+        </div>
+      ) : null}
 
       {selected.length > 0 ? (
         <div className="flex flex-wrap items-center gap-1.5 border-b bg-accent/30 px-4 py-2">
@@ -551,8 +608,10 @@ export function FilesView({
       />
 
       <InfoDialog
-        item={dialog.kind === "info" ? dialog.target : null}
+        item={infoTarget}
         baseDir={dir.path}
+        schemas={schemas}
+        onCreateShare={infoTarget ? () => setDialog({ kind: "share", target: infoTarget }) : undefined}
         onClose={close}
       />
 

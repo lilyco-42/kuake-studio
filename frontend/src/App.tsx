@@ -6,7 +6,6 @@ import {
   Link2,
   Loader2,
   Moon,
-  Search as SearchIcon,
   Trash2,
   Sun,
   User,
@@ -22,7 +21,6 @@ import { StartupDialog } from "@/components/commercial/startup-dialog";
 import { AboutView } from "@/components/views/about-view";
 import { AccountView } from "@/components/views/account-view";
 import { FilesView } from "@/components/views/files-view";
-import { SearchView } from "@/components/views/search-view";
 import { RecycleView } from "@/components/views/recycle-view";
 import { SharesView } from "@/components/views/shares-view";
 import { Badge } from "@/components/ui/badge";
@@ -33,16 +31,15 @@ import { useRunner } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { ZOOM_STEP, applyZoom, clampZoom, readZoom, resetZoom } from "@/lib/zoom";
 
-type Tab = "files" | "search" | "shares" | "recycle" | "account" | "about";
+type Tab = "files" | "shares" | "recycle" | "account" | "about";
 
 function readHash(): Tab {
   const h = location.hash.replace(/^#/, "");
-  return h === "search" || h === "shares" || h === "recycle" || h === "account" || h === "about" ? h : "files";
+  return h === "shares" || h === "recycle" || h === "account" || h === "about" ? h : "files";
 }
 
 const NAV: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "files", label: "文件", icon: FolderTree },
-  { id: "search", label: "搜索", icon: SearchIcon },
   { id: "shares", label: "分享", icon: Link2 },
   { id: "recycle", label: "回收站", icon: Trash2 },
   { id: "account", label: "账号", icon: User },
@@ -55,29 +52,29 @@ export default function App() {
   const [tab, setTabState] = React.useState<Tab>(() => readHash());
   // 「搜索 → 跳到所在目录」：用递增 nonce 让 FilesView 重新拉指定目录
   const [filesJump, setFilesJump] = React.useState<{ path: string; nonce: number } | null>(null);
-  const jumpSeq = React.useRef(0);
+  const [searchRequested, setSearchRequested] = React.useState(() => location.hash === "#search");
 
   // 用 location.hash 记住当前页（刷新/直达链接都落在同一页）
   const setTab = React.useCallback((t: Tab) => {
     setTabState(t);
-    if (t !== "files") setFilesJump(null);
+    if (t !== "files") {
+      setFilesJump(null);
+      setSearchRequested(false);
+    }
     if (location.hash !== "#" + t) history.replaceState(null, "", "#" + t);
   }, []);
-
-  const openDir = React.useCallback(
-    (path: string) => {
-      jumpSeq.current += 1;
-      setFilesJump({ path, nonce: jumpSeq.current });
-      setTab("files");
-    },
-    [setTab],
-  );
 
   React.useEffect(() => {
     const onHash = () => setTabState(readHash());
     const onTabRequest = (e: Event) => {
       const next = (e as CustomEvent<string>).detail;
       if (next === "about") setTab("about");
+      else if (next === "search") {
+        setTabState("files");
+        history.replaceState(null, "", "#files");
+        setFilesJump(null);
+        setSearchRequested(true);
+      }
     };
     window.addEventListener("hashchange", onHash);
     window.addEventListener("kuake-studio:set-tab", onTabRequest);
@@ -178,7 +175,6 @@ export default function App() {
               const active = tab === n.id;
               const disabled =
                 (n.id === "shares" && !hasShares) ||
-                (n.id === "search" && !hasSearch) ||
                 (n.id === "recycle" && !hasRecycle);
               return (
                 <button
@@ -186,9 +182,7 @@ export default function App() {
                   disabled={disabled}
                   onClick={() => setTab(n.id)}
                   title={
-                    n.id === "search" && !hasSearch
-                      ? t("cap.searchNative")
-                      : n.id === "recycle" && !hasRecycle
+                    n.id === "recycle" && !hasRecycle
                         ? t("cap.recycleNative")
                         : t("nav." + n.id)
                   }
@@ -302,9 +296,13 @@ export default function App() {
               <Skeleton className="h-40 w-full" />
             </div>
           ) : tab === "files" ? (
-            <FilesView schemas={schemas} jump={filesJump} />
-          ) : tab === "search" ? (
-            <SearchView onOpenDir={openDir} />
+            <FilesView
+              schemas={schemas}
+              jump={filesJump}
+              searchEnabled={hasSearch}
+              initialSearchOpen={searchRequested}
+              onOpenShares={() => setTab("shares")}
+            />
           ) : tab === "shares" ? (
             <SharesView schemas={schemas} />
           ) : tab === "recycle" ? (
