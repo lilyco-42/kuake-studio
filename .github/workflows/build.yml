@@ -444,10 +444,26 @@ jobs:
         run: |
           set -euo pipefail
           rustup target add aarch64-linux-android
-          curl -fsSL "https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz" -o /tmp/zig.tar.xz
-          mkdir -p /tmp/zig-sdk
-          tar -xJf /tmp/zig.tar.xz -C /tmp/zig-sdk --strip-components=1
-          export PATH="/tmp/zig-sdk:$PATH"
+          # ziglang.org 单连接常被限速到几十 KB/s；并发 Range + 本地缓存，避免 CI 卡住。
+          ZIG_URL="https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz"
+          ZIG_TAR="/tmp/zig-0.17.1.tar.xz"
+          ZIG_ROOT="/tmp/zig-sdk-0.17.1"
+          export ZIG_URL ZIG_TAR ZIG_ROOT
+          if [ ! -x "$ZIG_ROOT/zig" ]; then
+            rm -rf "$ZIG_ROOT" "$ZIG_TAR"; mkdir -p "$ZIG_ROOT"
+            total=$(curl -fsSLI "$ZIG_URL" | tr -d '\r' | awk 'tolower($1)=="content-length:" {print $2}' | tail -1)
+            [ -n "$total" ] || { echo "无法获取 Zig 包大小" >&2; exit 1; }
+            chunk=$((2 * 1024 * 1024))
+            seq 0 $(( (total + chunk - 1) / chunk - 1 )) | xargs -P 8 -I{} sh -c '
+              start=$(({} * 2 * 1024 * 1024))
+              end=$((start + 2 * 1024 * 1024 - 1))
+              curl -fsSL --retry 5 --retry-delay 2 -r "$start-$end" "$ZIG_URL" -o "$ZIG_TAR.part.{}"
+            '
+            cat $(seq 0 $(( (total + chunk - 1) / chunk - 1 )) | sed "s|^|$ZIG_TAR.part.|") > "$ZIG_TAR"
+            rm -f "$ZIG_TAR".part.*
+            tar -xJf "$ZIG_TAR" -C "$ZIG_ROOT" --strip-components=1
+          fi
+          export PATH="$ZIG_ROOT:$PATH"
           zig version
           export CC_aarch64_linux_android="$PWD/tools/cc-aarch64-musl.sh"
           # cc-rs 对 android 目标会探测 llvm-ar，失败就拼 ${target}-ar；runner 两者都无 → 显式用 GNU ar（只打包 .a，不链接）
@@ -474,10 +490,26 @@ jobs:
         run: |
           set -euo pipefail
           rustup target add aarch64-unknown-linux-ohos
-          curl -fsSL "https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz" -o /tmp/zig.tar.xz
-          mkdir -p /tmp/zig-sdk
-          tar -xJf /tmp/zig.tar.xz -C /tmp/zig-sdk --strip-components=1
-          export PATH="/tmp/zig-sdk:$PATH"
+          # ziglang.org 单连接常被限速到几十 KB/s；并发 Range + 本地缓存，避免 CI 卡住。
+          ZIG_URL="https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz"
+          ZIG_TAR="/tmp/zig-0.17.1.tar.xz"
+          ZIG_ROOT="/tmp/zig-sdk-0.17.1"
+          export ZIG_URL ZIG_TAR ZIG_ROOT
+          if [ ! -x "$ZIG_ROOT/zig" ]; then
+            rm -rf "$ZIG_ROOT" "$ZIG_TAR"; mkdir -p "$ZIG_ROOT"
+            total=$(curl -fsSLI "$ZIG_URL" | tr -d '\r' | awk 'tolower($1)=="content-length:" {print $2}' | tail -1)
+            [ -n "$total" ] || { echo "无法获取 Zig 包大小" >&2; exit 1; }
+            chunk=$((2 * 1024 * 1024))
+            seq 0 $(( (total + chunk - 1) / chunk - 1 )) | xargs -P 8 -I{} sh -c '
+              start=$(({} * 2 * 1024 * 1024))
+              end=$((start + 2 * 1024 * 1024 - 1))
+              curl -fsSL --retry 5 --retry-delay 2 -r "$start-$end" "$ZIG_URL" -o "$ZIG_TAR.part.{}"
+            '
+            cat $(seq 0 $(( (total + chunk - 1) / chunk - 1 )) | sed "s|^|$ZIG_TAR.part.|") > "$ZIG_TAR"
+            rm -f "$ZIG_TAR".part.*
+            tar -xJf "$ZIG_TAR" -C "$ZIG_ROOT" --strip-components=1
+          fi
+          export PATH="$ZIG_ROOT:$PATH"
           zig version
           # 与 Android 同理：显式指定归档器，避免 runner 镜像变化后 cc-rs 拼出不存在的交叉 ar
           export CC_aarch64_unknown_linux_ohos="$PWD/tools/cc-aarch64-musl.sh"
