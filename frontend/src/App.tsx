@@ -203,7 +203,7 @@ export default function App() {
           </nav>
 
           <div className="mt-auto grid gap-1">
-            <div className="hidden items-center justify-between gap-0.5 px-1 md:flex">
+            <div className="mx-auto flex w-full max-w-[13rem] items-center justify-between gap-0.5 px-1 md:flex">
               <Button
                 variant="ghost"
                 size="icon-sm"

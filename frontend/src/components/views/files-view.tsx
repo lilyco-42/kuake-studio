@@ -246,18 +246,20 @@ export function FilesView({
           </nav>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
           <Button variant="ghost" size="icon-sm" onClick={() => void load(dir.path)} title={t("common.refresh")}>
             <RefreshCw className={cn("size-4", dir.loading && "animate-spin")} />
           </Button>
           {searchEnabled ? (
             <Button
-              variant="ghost"
-              size="icon-sm"
+              variant="outline"
+              size="sm"
+              className="gap-1.5 px-2 md:px-3"
               onClick={() => setSearchOpen((v) => !v)}
               title={t("files.searchInline")}
             >
               <SearchIcon className={cn("size-4", searchOpen && "text-primary")} />
+              <span className="hidden lg:inline">{t("files.searchInline")}</span>
             </Button>
           ) : null}
           {onOpenShares ? (
@@ -307,9 +309,9 @@ export function FilesView({
       </div>
 
       {searchOpen && searchEnabled ? (
-        <div className="border-b bg-muted/20">
+        <div className="min-h-0 flex-1 overflow-hidden border-b bg-muted/20">
           <div className="flex items-center gap-2 px-4 pt-2 text-[11px] text-muted-foreground">
-            <span>{t("files.searchHint")}</span>
+            <span className="truncate">{t("files.searchHint")}</span>
             <Button
               variant="ghost"
               size="icon-sm"
