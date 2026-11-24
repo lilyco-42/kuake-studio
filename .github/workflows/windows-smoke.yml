@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "要验证的 Release 标签（如 v0.5.18）"
+        description: "要验证的 Release 标签（如 v0.5.19）"
         required: true
-        default: v0.5.18
+        default: v0.5.19
 
 permissions:
   contents: read
