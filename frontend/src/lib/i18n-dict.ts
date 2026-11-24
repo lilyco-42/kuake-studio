@@ -121,6 +121,7 @@ export const ROWS: ReadonlyArray<readonly [string, string, string]> = [
   ["files.colSize", "大小", "Size"],
   ["files.colMtime", "修改时间", "Modified"],
   ["files.selectItem", "选择 {name}", "Select {name}"],
+  ["files.actions", "操作", "Actions"],
   ["files.encrypted", "已加密", "Encrypted"],
   ["files.open", "打开", "Open"],
   ["files.details", "详情", "Details"],

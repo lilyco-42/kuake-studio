@@ -117,6 +117,7 @@ export function FilesView({
   const [selected, setSelected] = React.useState<string[]>([]);
   const [history, setHistory] = React.useState<string[]>([]);
   const [searchOpen, setSearchOpen] = React.useState(initialSearchOpen && searchEnabled);
+  const [searchRefreshKey, setSearchRefreshKey] = React.useState(0);
 
   const argsOf = React.useCallback(
     (name: string): ArgSchema[] => schemas.find((s) => s.name === name)?.args ?? [],
@@ -205,7 +206,10 @@ export function FilesView({
     }
   };
 
-  const close = () => setDialog({ kind: "none" });
+  const close = () => {
+    setDialog({ kind: "none" });
+    setSearchRefreshKey((n) => n + 1);
+  };
   const infoTarget = dialog.kind === "info" ? dialog.target : null;
   const targetPath = (d: DialogState) =>
     d.kind === "rename" ||
@@ -325,12 +329,19 @@ export function FilesView({
           <SearchView
             compact
             schemas={schemas}
+            refreshKey={searchRefreshKey}
             onOpenDir={(path) => {
               setSearchOpen(false);
               void load(path, { pushHistory: true });
             }}
             onOpenItem={(item) => setDialog({ kind: "info", target: item })}
             onShare={(item) => setDialog({ kind: "share", target: item })}
+            onDownload={(item) => setDialog({ kind: "download", target: item })}
+            onRename={(item) => setDialog({ kind: "rename", target: item })}
+            onMove={(item) => setDialog({ kind: "move", target: item })}
+            onCopy={(item) => setDialog({ kind: "copy", target: item })}
+            onDelete={(item) => setConfirmDelete(item)}
+            onDecrypt={(item) => setDialog({ kind: "decrypt", target: item })}
           />
         </div>
       ) : null}
@@ -544,7 +555,10 @@ export function FilesView({
         }
         hide={["path"]}
         submitLabel={t("files.rename")}
-        onSuccess={() => void load(dir.path)}
+        onSuccess={() => {
+          void load(dir.path);
+          setSearchRefreshKey((n) => n + 1);
+        }}
       />
 
       <CommandDialog
@@ -557,7 +571,10 @@ export function FilesView({
         preset={dialog.kind === "move" ? { src: targetPath(dialog), dest: dir.path } : undefined}
         hide={["src"]}
         submitLabel={t("files.move")}
-        onSuccess={() => void load(dir.path)}
+        onSuccess={() => {
+          void load(dir.path);
+          setSearchRefreshKey((n) => n + 1);
+        }}
       />
 
       <CommandDialog
@@ -570,7 +587,10 @@ export function FilesView({
         preset={dialog.kind === "copy" ? { src: targetPath(dialog), dest: dir.path } : undefined}
         hide={["src"]}
         submitLabel={t("files.copy")}
-        onSuccess={() => void load(dir.path)}
+        onSuccess={() => {
+          void load(dir.path);
+          setSearchRefreshKey((n) => n + 1);
+        }}
       />
 
       <CommandDialog
@@ -587,6 +607,7 @@ export function FilesView({
             void navigator.clipboard?.writeText(url).catch(() => {});
             toast.success(t("files.shareCopied"), { description: url });
           }
+          setSearchRefreshKey((n) => n + 1);
         }}
       />
 
@@ -645,6 +666,7 @@ export function FilesView({
             await run("delete", { path: pathOf(confirmDelete) }, t("op.delete"));
             toast.success(t("files.deleted"));
             await load(dir.path);
+            setSearchRefreshKey((n) => n + 1);
           } catch (e) {
             toast.error(e instanceof Error ? e.message : String(e));
           }

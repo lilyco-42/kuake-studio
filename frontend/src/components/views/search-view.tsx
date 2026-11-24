@@ -4,19 +4,32 @@ import {
   Check,
   Copy,
   CornerDownRight,
+  Download,
   ExternalLink,
   FileSearch,
   Info,
   Link2,
   Loader2,
+  MoreHorizontal,
+  Pencil,
   RefreshCw,
+  Scissors,
   Search,
+  Trash2,
+  Unlock,
   X,
 } from "lucide-react";
 
 import { fileIcon } from "@/components/file-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,6 +41,10 @@ import { indexSharesByPath, sharesForItem, type ShareListResult } from "@/lib/sh
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
+
+function isEncrypted(name: string): boolean {
+  return name.toLowerCase().endsWith(".kcrypt");
+}
 
 const ENTITIES: Record<string, string> = {
   amp: "&",
@@ -110,12 +127,26 @@ export function SearchView({
   onOpenDir,
   onOpenItem,
   onShare,
+  onDownload,
+  onRename,
+  onMove,
+  onCopy,
+  onDelete,
+  onDecrypt,
+  refreshKey = 0,
   schemas = [],
   compact = false,
 }: {
   onOpenDir: (path: string) => void;
   onOpenItem?: (item: SearchHit) => void;
   onShare?: (item: SearchHit) => void;
+  onDownload?: (item: SearchHit) => void;
+  onRename?: (item: SearchHit) => void;
+  onMove?: (item: SearchHit) => void;
+  onCopy?: (item: SearchHit) => void;
+  onDelete?: (item: SearchHit) => void;
+  onDecrypt?: (item: SearchHit) => void;
+  refreshKey?: number;
   schemas?: CommandSchema[];
   compact?: boolean;
 }) {
@@ -173,7 +204,7 @@ export function SearchView({
     };
     // nonce 让「同关键词按回车 / 点重试」也能强制重跑一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [booted, term, nonce, run]);
+  }, [booted, term, nonce, refreshKey, run]);
 
   React.useEffect(() => {
     if (!canListShares || hits.length === 0) {
@@ -338,7 +369,15 @@ export function SearchView({
             </div>
             <ul className="divide-y">
               {hits.map((h, i) => (
-                <li key={h.fid || i} className="group hover:bg-muted/40">
+                <li
+                  key={h.fid || i}
+                  className="group hover:bg-muted/40"
+                  onDoubleClick={() => {
+                    if (!usable(h)) return;
+                    if (h.dir) onOpenDir(h.path);
+                    else onOpenItem?.(h);
+                  }}
+                >
                   <div className="flex items-start gap-3 px-4 py-3">
                     <div className="mt-0.5 shrink-0">{fileIcon(h.file_name, h.dir)}</div>
                     <div className="min-w-0 flex-1">
@@ -395,11 +434,80 @@ export function SearchView({
                           variant="ghost"
                           size="icon-sm"
                           title={t("files.createShare")}
+                          disabled={!usable(h)}
                           onClick={() => onShare(h)}
                         >
                           <Link2 className="size-4" />
                         </Button>
                       ) : null}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-1 px-2"
+                            title={t("files.actions")}
+                          >
+                            <MoreHorizontal className="size-4" />
+                            <span className="hidden xl:inline">{t("files.actions")}</span>
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-44">
+                          {h.dir ? (
+                            <DropdownMenuItem disabled={!usable(h)} onClick={() => onOpenDir(h.path)}>
+                              <CornerDownRight className="size-4" /> {t("files.open")}
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem disabled={!usable(h)} onClick={() => onOpenDir(parentPath(h.path))}>
+                              <CornerDownRight className="size-4" /> {t("search.jumpDir")}
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuItem onClick={() => onOpenItem?.(h)}>
+                            <Info className="size-4" /> {t("files.details")}
+                          </DropdownMenuItem>
+                          {!h.dir && onDownload ? (
+                            <DropdownMenuItem disabled={!usable(h)} onClick={() => onDownload(h)}>
+                              <Download className="size-4" /> {t("files.download")}
+                            </DropdownMenuItem>
+                          ) : null}
+                          {!h.dir && isEncrypted(h.file_name) && onDecrypt ? (
+                            <DropdownMenuItem disabled={!usable(h)} onClick={() => onDecrypt(h)}>
+                              <Unlock className="size-4" /> {t("files.decryptLocal")}
+                            </DropdownMenuItem>
+                          ) : null}
+                          {onShare ? (
+                            <DropdownMenuItem disabled={!usable(h)} onClick={() => onShare(h)}>
+                              <Link2 className="size-4" /> {t("files.createShare")}
+                            </DropdownMenuItem>
+                          ) : null}
+                          <DropdownMenuSeparator />
+                          {onRename ? (
+                            <DropdownMenuItem disabled={!usable(h)} onClick={() => onRename(h)}>
+                              <Pencil className="size-4" /> {t("files.rename")}
+                            </DropdownMenuItem>
+                          ) : null}
+                          {onMove ? (
+                            <DropdownMenuItem disabled={!usable(h)} onClick={() => onMove(h)}>
+                              <Scissors className="size-4" /> {t("files.move")}
+                            </DropdownMenuItem>
+                          ) : null}
+                          {onCopy ? (
+                            <DropdownMenuItem disabled={!usable(h)} onClick={() => onCopy(h)}>
+                              <Copy className="size-4" /> {t("files.copy")}
+                            </DropdownMenuItem>
+                          ) : null}
+                          <DropdownMenuSeparator />
+                          {onDelete ? (
+                            <DropdownMenuItem
+                              variant="destructive"
+                              disabled={!usable(h)}
+                              onClick={() => onDelete(h)}
+                            >
+                              <Trash2 className="size-4" /> {t("files.delete")}
+                            </DropdownMenuItem>
+                          ) : null}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       <Button
                         variant="ghost"
                         size="icon-sm"
